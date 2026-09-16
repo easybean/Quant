@@ -40,7 +40,7 @@ export default function App() {
   else if (activeId === 'factor-research') content = <FactorResearch />
   else if (activeId === 'new-backtest') content = <BacktestWizard />
   else if (activeId === 'strategy-templates') content = <StrategyWorkspace />
-  else if (activeId === 'my-strategies' || activeId === 'strategy-details') content = <VisualStrategyWorkspace />
+  else if (activeId === 'my-strategies' || activeId === 'strategy-details') content = <VisualStrategyWorkspace onNavigate={navigate} />
   else if (activeId === 'instruments') content = <InstrumentWorkspace />
   else if (activeId === 'datasets') content = <AssetPoolWorkspace />
   else if (activeId === 'risk-rules') content = <RiskPolicyWorkspace />
