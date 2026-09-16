@@ -1,0 +1,12 @@
+[Unit]
+Description=Refresh unqualified Yahoo daily browser index offline
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/davidou/quant/app
+Environment=PYTHONPATH=/home/davidou/quant/app/src
+ExecStart=/home/davidou/quant/venv/bin/python -m quant_data.daily_quote_browser --data-root /home/davidou/quant/data
+ExecStartPost=/home/davidou/quant/venv/bin/python -m quant_data.sync_coverage --data-root /home/davidou/quant/data --security-master /home/davidou/quant/data/metadata/security_master.parquet
+TimeoutStartSec=4min
+Nice=10
+UMask=0077

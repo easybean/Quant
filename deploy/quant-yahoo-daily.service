@@ -10,8 +10,12 @@ Environment=PYTHONPATH=/home/davidou/quant/app/src
 Environment=HTTP_PROXY=http://127.0.0.1:7890
 Environment=HTTPS_PROXY=http://127.0.0.1:7890
 Environment=NO_PROXY=localhost,127.0.0.1,::1
+ExecStartPre=/home/davidou/quant/venv/bin/python -m quant_data.sync_baselines --data-root /home/davidou/quant/data --output /home/davidou/quant/data/manifests/yahoo-daily-v1/baselines.json
 ExecStartPre=/usr/bin/timeout 20 /bin/sh -c "until /home/davidou/quant/venv/bin/python -c 'import socket; socket.create_connection((\"127.0.0.1\",7890),timeout=1).close()' 2>/dev/null; do sleep 1; done"
-ExecStart=/home/davidou/quant/venv/bin/python -m quant_data.daily_sync --security-master /home/davidou/quant/data/metadata/security_master.parquet --data-root /home/davidou/quant/data --start 2016-01-01 --bootstrap-lookback-days 14 --request-delay 2 --max-consecutive-failures 3 --max-backfill-symbols 100
+ExecStart=/home/davidou/quant/venv/bin/python -m quant_data.daily_sync --security-master /home/davidou/quant/data/metadata/security_master.parquet --data-root /home/davidou/quant/data --start 2016-01-01 --baseline-index /home/davidou/quant/data/manifests/yahoo-daily-v1/baselines.json --request-delay 2 --max-consecutive-failures 3 --max-runtime-seconds 64800
+# Rebuild the offline browser catalogue even when the bounded sync exits
+# partial/failed, so bars already atomically committed remain discoverable.
+ExecStopPost=/home/davidou/quant/venv/bin/python -m quant_data.daily_quote_browser --data-root /home/davidou/quant/data
 TimeoutStartSec=20h
 SuccessExitStatus=2
 Nice=10

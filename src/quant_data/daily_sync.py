@@ -18,15 +18,88 @@ import uuid
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from .pipeline import default_yfinance_downloader, normalize_bars, symbol_key
+from .pipeline import normalize_bars, symbol_key, yahoo_symbol
 
 NAMESPACE = "yahoo-daily-v1"
 PROVIDER = "yfinance"
 START_FLOOR = date(2016, 1, 1)
+
+
+class ConfirmedSymbolUnavailable(RuntimeError):
+    """Yahoo chart endpoint explicitly confirms that a symbol does not exist."""
+
+
+def yahoo_daily_history_downloader(symbol: str, start: date, end: date) -> pd.DataFrame:
+    """Fetch one Yahoo symbol with errors preserved for this syncer's circuit breaker.
+
+    This intentionally does not share the pipeline downloader: batch download
+    responses can hide the per-symbol failure class needed here to distinguish
+    Yahoo's confirmed no-symbol/no-history responses from provider failures.
+    """
+    import yfinance as yf
+
+    return yf.Ticker(yahoo_symbol(symbol)).history(
+        start=start.isoformat(),
+        end=(end + timedelta(days=1)).isoformat(),  # Yahoo's end is exclusive.
+        interval="1d",
+        auto_adjust=False,
+        actions=True,
+        timeout=30,
+        raise_errors=True,
+    )
+
+
+def _is_yfinance_missing_metadata_or_prices(exc: Exception) -> bool:
+    """Identify errors that require a Yahoo chart diagnostic before exemption."""
+    try:
+        import yfinance as yf
+
+        exceptions = yf.exceptions
+        unavailable = tuple(
+            error_type
+            for name in ("YFPricesMissingError", "YFTzMissingError")
+            if isinstance((error_type := getattr(exceptions, name, None)), type)
+        )
+    except (ImportError, AttributeError):
+        return False
+    return bool(unavailable) and isinstance(exc, unavailable)
+
+
+def _raise_if_chart_confirms_symbol_unavailable(symbol: str) -> None:
+    """Perform one bounded Yahoo diagnostic, failing closed on every ambiguity.
+
+    yfinance can wrap transport/JSON failures in missing-price or missing-timezone
+    exceptions.  Only Yahoo's own chart error code, paired with a 404 or 200
+    response, establishes that the provider says this particular symbol is not
+    available.  curl_cffi inherits the service's proxy environment.
+    """
+    try:
+        from curl_cffi import requests
+
+        provider_symbol = yahoo_symbol(symbol)
+        response = requests.get(
+            "https://query1.finance.yahoo.com/v8/finance/chart/" + quote(provider_symbol, safe=""),
+            params={"interval": "1d", "range": "5d"},
+            impersonate="chrome",
+            timeout=30,
+        )
+        if response.status_code not in (200, 404):
+            return False
+        payload = response.json()
+        error = ((payload.get("chart") or {}).get("error") or {}) if isinstance(payload, dict) else {}
+        if isinstance(error, dict) and error.get("code") in {"Not Found", "NotFound"}:
+            raise ConfirmedSymbolUnavailable("yahoo_chart_not_found")
+    except ConfirmedSymbolUnavailable:
+        raise
+    except Exception:
+        # Network, HTTP decoding, and JSON errors are all provider failures,
+        # never evidence that a security master symbol is unavailable.
+        return False
 
 
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:
@@ -80,6 +153,54 @@ def _latest_attempts(records_path: Path) -> dict[str, str]:
                     result[symbol] = attempted
             except (TypeError, ValueError):
                 continue
+    return result
+
+
+def _earliest_successful_request_starts(records_path: Path) -> dict[str, date]:
+    """Find the first successful Yahoo request start per symbol, ignoring bad audit rows."""
+    result: dict[str, date] = {}
+    if not records_path.exists():
+        return result
+    with records_path.open(encoding="utf-8") as handle:
+        for line in handle:
+            try:
+                row = json.loads(line)
+                if not isinstance(row, dict) or row.get("status") != "success":
+                    continue
+                symbol = str(row.get("symbol", "")).strip().upper()
+                requested_start = date.fromisoformat(str(row.get("requested_start", "")))
+                if symbol and (symbol not in result or requested_start < result[symbol]):
+                    result[symbol] = requested_start
+            except (TypeError, ValueError):
+                continue
+    return result
+
+
+def _load_baseline_index(path: Path | None, now: datetime) -> dict[str, date]:
+    """Load a fail-closed, externally generated legacy-bar coverage index."""
+    if path is None:
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, TypeError, ValueError) as exc:
+        raise ValueError("baseline_index_unreadable_or_invalid") from exc
+    if not isinstance(payload, dict) or payload.get("schema_version") != "yahoo-sync-baselines-v1":
+        raise ValueError("baseline_index_schema_invalid")
+    rows = payload.get("symbols")
+    if not isinstance(rows, dict):
+        raise ValueError("baseline_index_symbols_invalid")
+    result: dict[str, date] = {}
+    for raw_symbol, value in rows.items():
+        symbol = str(raw_symbol).strip().upper()
+        if not symbol or not isinstance(value, dict) or not isinstance(value.get("last_date"), str):
+            raise ValueError("baseline_index_symbol_invalid")
+        try:
+            last_date = date.fromisoformat(value["last_date"])
+        except ValueError as exc:
+            raise ValueError("baseline_index_date_invalid") from exc
+        if last_date > now.astimezone(timezone.utc).date():
+            raise ValueError("baseline_index_future_date")
+        result[symbol] = last_date
     return result
 
 
@@ -156,9 +277,12 @@ def run_sync(
     max_consecutive_failures: int = 3,
     max_backfill_symbols: int = 0,
     bootstrap_lookback_days: int = 0,
-    downloader: Callable[[str, date, date], pd.DataFrame] = default_yfinance_downloader,
+    downloader: Callable[[str, date, date], pd.DataFrame] = yahoo_daily_history_downloader,
     now: datetime | None = None,
     sleep: Callable[[float], None] = time.sleep,
+    max_runtime_seconds: float = 0,
+    monotonic: Callable[[], float] = time.monotonic,
+    baseline_index: Path | None = None,
 ) -> dict[str, Any]:
     """Synchronize active Stock/ETF symbols, preserving every raw response."""
     start = max(start, START_FLOOR)
@@ -173,6 +297,8 @@ def run_sync(
         raise ValueError("limits must be non-negative and max_consecutive_failures positive")
     if not math.isfinite(request_delay) or request_delay < 0:
         raise ValueError("request_delay_must_be_finite_non_negative")
+    if not math.isfinite(max_runtime_seconds) or max_runtime_seconds < 0:
+        raise ValueError("max_runtime_seconds_must_be_finite_non_negative")
 
     manifest = data_root / "manifests" / NAMESPACE
     records_path = manifest / "records.jsonl"
@@ -201,8 +327,10 @@ def run_sync(
             _atomic_json(manifest / "latest.json", summary)
 
         write_progress()
+        runtime_started = monotonic()
 
         master = _read_master(security_master)
+        baselines = _load_baseline_index(baseline_index, now)
         required = {"symbol", "status", "asset_type"}
         if not required.issubset(master.columns):
             raise ValueError("security_master_missing_required_columns")
@@ -212,6 +340,7 @@ def run_sync(
         ]["symbol"].dropna().astype(str).str.strip().str.upper()
         symbols = list(dict.fromkeys(symbol for symbol in selected if symbol))
         attempts = _latest_attempts(records_path)
+        successful_starts = _earliest_successful_request_starts(records_path)
         symbols.sort(key=lambda symbol: (attempts.get(symbol, ""), symbol))
         requested = len(symbols)
         deferred = 0
@@ -225,6 +354,23 @@ def run_sync(
         consecutive = 0
         limited_backfills = 0
         for index, symbol in enumerate(symbols):
+            # A zero budget deliberately means unlimited.  Check before any
+            # per-symbol attempt, so a timed-out run never claims it tried a
+            # symbol whose provider request was not started.
+            if max_runtime_seconds and monotonic() - runtime_started >= max_runtime_seconds:
+                remaining = symbols[index:]
+                summary["deferred"] += len(remaining)
+                summary["runtime_budget_exhausted"] = True
+                for deferred_symbol in remaining:
+                    _append_record(records_path, {
+                        "run_id": run_id, "symbol": deferred_symbol,
+                        "deferred_at": datetime.now(timezone.utc).isoformat(),
+                        "requested_start": None, "requested_end": target.isoformat(),
+                        "namespace": NAMESPACE, "source": PROVIDER, "unqualified": True,
+                        "status": "deferred", "error_code": "runtime_budget_exhausted",
+                    })
+                write_progress()
+                break
             destination = data_root / "bars" / "daily" / f"provider={PROVIDER}" / f"namespace={NAMESPACE}" / f"symbol={symbol_key(symbol)}" / "bars.parquet"
             try:
                 existing = _load_existing(destination)
@@ -255,12 +401,32 @@ def run_sync(
                     summary["deferred"] += 1
                     continue
                 limited_backfills += 1
-                request_start = start if bootstrap_lookback_days == 0 else max(
-                    start, target - timedelta(days=bootstrap_lookback_days - 1)
-                )
+                baseline_date = baselines.get(symbol)
+                if baseline_date is not None:
+                    if baseline_date >= target:
+                        _append_record(records_path, {
+                            "run_id": run_id, "symbol": symbol,
+                            "observed_at": datetime.now(timezone.utc).isoformat(),
+                            "requested_start": None, "requested_end": target.isoformat(),
+                            "namespace": NAMESPACE, "source": PROVIDER, "unqualified": True,
+                            "status": "up_to_date", "baseline_last_date": baseline_date.isoformat(),
+                        })
+                        summary["already_current"] = summary.get("already_current", 0) + 1
+                        write_progress()
+                        continue
+                    request_start = max(start, baseline_date + timedelta(days=1))
+                else:
+                    request_start = start if bootstrap_lookback_days == 0 else max(
+                        start, target - timedelta(days=bootstrap_lookback_days - 1)
+                    )
             else:
                 current_max = pd.to_datetime(existing["date"], errors="raise").max().date()
                 request_start = max(start, current_max - timedelta(days=7))
+                baseline_date = baselines.get(symbol)
+                if baseline_date is not None:
+                    bridge_start = max(start, baseline_date + timedelta(days=1))
+                    if successful_starts.get(symbol, target + timedelta(days=1)) > bridge_start:
+                        request_start = min(request_start, bridge_start)
             if request_start > target:
                 request_start = target  # still permits a one-day correction probe
             summary["attempted"] += 1
@@ -278,6 +444,12 @@ def run_sync(
                     "retrieved_at": datetime.now(timezone.utc).isoformat(), "row_count": int(len(raw)),
                     "actions_status": _raw_actions_status(raw)})
                 normalized = normalize_bars(raw, symbol, PROVIDER, "raw_ohlc_with_adjusted_close_and_actions")
+                # yfinance Ticker.history indexes daily bars at New York
+                # midnight.  normalize_bars correctly converts timestamps to
+                # UTC, but this acquisition namespace keys daily bars by their
+                # exchange calendar date, not the resulting 04:00/05:00 UTC
+                # instant.  Keep a timezone-free natural-date canonical key.
+                normalized["date"] = pd.to_datetime(normalized["date"], errors="raise").dt.normalize()
                 raw_columns = _raw_columns(raw)
                 # normalize_bars uses zeroes as a compatibility default.  For
                 # this raw archive namespace, absent action columns are unknown,
@@ -289,7 +461,7 @@ def run_sync(
                 normalized["retrieved_at"] = record["retrieved_at"]
                 _validate_normalized(normalized, request_start, target)
                 merged = normalized if existing is None else pd.concat([existing, normalized], ignore_index=True)
-                merged["date"] = pd.to_datetime(merged["date"], errors="raise")
+                merged["date"] = pd.to_datetime(merged["date"], errors="raise").dt.normalize()
                 merged = merged.drop_duplicates("date", keep="last").sort_values("date", ignore_index=True)
                 _atomic_parquet(merged, destination)
                 record.update({"status": "success"})
@@ -298,9 +470,19 @@ def run_sync(
                 summary["max_data_date"] = max(max_day, summary["max_data_date"] or max_day)
                 consecutive = 0
             except Exception as exc:
-                record.update({"status": "failed", "error_type": type(exc).__name__, "error_code": _error_code(exc)})
+                symbol_unavailable = False
+                if _is_yfinance_missing_metadata_or_prices(exc):
+                    try:
+                        _raise_if_chart_confirms_symbol_unavailable(symbol)
+                    except ConfirmedSymbolUnavailable:
+                        symbol_unavailable = True
+                record.update({"status": "failed", "error_type": type(exc).__name__,
+                               "error_code": "symbol_unavailable" if symbol_unavailable else _error_code(exc)})
                 summary["failed"] += 1
-                consecutive += 1
+                # Confirmed unavailable symbols are still failed acquisition
+                # attempts, but are not evidence of a provider-wide outage.
+                if not symbol_unavailable:
+                    consecutive += 1
             _append_record(records_path, record)
             if consecutive >= max_consecutive_failures:
                 summary["circuit_open"] = True
@@ -339,6 +521,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--bootstrap-lookback-days", type=int, default=0)
     parser.add_argument("--request-delay", type=float, default=1.0)
     parser.add_argument("--max-consecutive-failures", type=int, default=3)
+    parser.add_argument("--max-runtime-seconds", type=float, default=0)
+    parser.add_argument("--baseline-index", type=Path)
     args = parser.parse_args(argv)
     try:
         result = run_sync(**vars(args))

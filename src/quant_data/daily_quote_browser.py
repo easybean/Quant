@@ -9,6 +9,8 @@ series instead of being silently stitched into a price history.
 from __future__ import annotations
 
 import json
+import argparse
+import fcntl
 import os
 import re
 import uuid
@@ -131,6 +133,58 @@ def _load_catalogue(root: Path) -> list[dict[str, Any]]:
     return entries
 
 
+def refresh_yahoo_browser_catalogue(data_root: str | Path) -> dict[str, object]:
+    """Offline publication of acquired Yahoo views; never grants research eligibility.
+
+    Preserve every other provider/namespace. The HTTP layer still reads a fixed
+    catalogue and never scans bar directories or stitches sources together.
+    """
+    root = _data_root(data_root)
+    destination = _catalogue_path(root)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with (destination.parent / "us-daily-browser-refresh.lock").open("a+") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        if destination.exists():
+            payload = json.loads(destination.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict) or payload.get("schema_version") != DAILY_BROWSER_SCHEMA_VERSION or not isinstance(payload.get("series"), list):
+                raise DailyQuoteUnavailable("Existing browser catalogue is invalid; refusing replacement")
+        else:
+            payload = {"schema_version": DAILY_BROWSER_SCHEMA_VERSION,
+                       "scope": "美国股票 raw 日线；来源序列未合并。", "price_basis": "raw_or_unadjusted", "series": []}
+        entries = [item for item in payload["series"] if not (
+            isinstance(item, dict) and item.get("provider") == "yfinance" and item.get("namespace") == "yahoo-daily-v1")]
+        raw_root = root / "bars" / "daily"
+        namespace = raw_root / "provider=yfinance" / "namespace=yahoo-daily-v1"
+        rejected = 0
+        for path in sorted(namespace.glob("symbol=*/bars.parquet")):
+            relative = path.relative_to(raw_root).as_posix()
+            key = path.parent.name.removeprefix("symbol=")
+            series_id = f"yfinance:yahoo-daily-v1:{key}"
+            if (not _safe_raw_relative(relative) or not _SERIES.fullmatch(series_id)
+                    or not _QUERY.fullmatch(_symbol(key)) or raw_root.resolve() not in path.resolve().parents):
+                rejected += 1
+                continue
+            try:
+                frame = pd.read_parquet(path, columns=list(_PUBLIC_COLUMNS))
+                dates = pd.to_datetime(frame["date"], errors="raise")
+                if frame.empty or dates.isna().any() or dates.dt.normalize().duplicated().any() or not frame["source"].eq("yfinance").all():
+                    raise ValueError("invalid_yahoo_view")
+            except (OSError, ValueError, KeyError, ImportError):
+                rejected += 1
+                continue
+            entries.append({"series_id": series_id, "symbol": _symbol(key), "provider": "yfinance",
+                "namespace": "yahoo-daily-v1", "raw_relative_path": relative,
+                "first_date": dates.min().date().isoformat(), "last_date": dates.max().date().isoformat(),
+                "rows": len(frame), "quality_warning": "Yahoo 同步视图，未获研究资格；历史价格可能经过拆股调整，不能视为总回报或历史 PIT 数据。"})
+        # Newest series first within each symbol, keeping sources visibly separate.
+        entries.sort(key=lambda item: str(item.get("last_date", "")), reverse=True)
+        entries.sort(key=lambda item: str(item.get("symbol", "")))
+        payload["series"] = entries
+        _atomic_json(payload, destination)
+        return {"series": len(entries), "rejected_yahoo_files": rejected,
+                "yahoo_series": sum(item.get("provider") == "yfinance" and item.get("namespace") == "yahoo-daily-v1" for item in entries)}
+
+
 def search_us_daily_series(query: str, limit: int = 10, *, data_root: str | Path | None = None) -> dict[str, object]:
     normalized = query.strip().upper()
     if not _QUERY.fullmatch(normalized):
@@ -198,3 +252,10 @@ def read_us_daily_bars(series_id: str, start: str, end: str, *, data_root: str |
         "limitations": ["原始/未复权价格，不代表总回报。", "来源序列未合并；缺失日期不等同于停牌。", "公司行为与退市最终回报未处理。"],
         "bars": bars,
     }
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Offline refresh of unqualified Yahoo browser series")
+    parser.add_argument("--data-root", required=True, type=Path)
+    arguments = parser.parse_args()
+    print(json.dumps(refresh_yahoo_browser_catalogue(arguments.data_root)))

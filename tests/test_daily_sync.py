@@ -1,6 +1,8 @@
 from datetime import date, datetime, timezone
 import fcntl
 import json
+import sys
+import types
 
 import pandas as pd
 import pytest
@@ -26,6 +28,14 @@ def _bars(days):
     return pd.DataFrame({"Open": [10.0] * len(index), "High": [11.0] * len(index),
                          "Low": [9.0] * len(index), "Close": [10.5] * len(index),
                          "Volume": [5] * len(index)}, index=index)
+
+
+def _baseline(tmp_path, symbols):
+    path = tmp_path / "baselines.json"
+    path.write_text(json.dumps({"schema_version": "yahoo-sync-baselines-v1", "symbols": {
+        symbol: {"last_date": value} for symbol, value in symbols.items()
+    }}), encoding="utf-8")
+    return path
 
 
 def test_incremental_window_archives_raw_and_keeps_revision(tmp_path):
@@ -194,3 +204,171 @@ def test_malformed_attempt_records_do_not_block_sync(tmp_path):
     records.write_text('null\n[]\n{"unfinished":\n', encoding="utf-8")
     result = run_sync(master, root, now=NOW, downloader=lambda *_: _bars(["2024-01-02"]), sleep=lambda _: None)
     assert result["status"] == "success"
+
+
+def test_dedicated_yahoo_history_downloader_uses_single_ticker_raising_api(monkeypatch):
+    calls = []
+    frame = _bars(["2024-01-02"])
+    class Ticker:
+        def __init__(self, symbol):
+            calls.append(("Ticker", symbol))
+
+        def history(self, **kwargs):
+            calls.append(("history", kwargs))
+            return frame
+    monkeypatch.setitem(sys.modules, "yfinance", types.SimpleNamespace(Ticker=Ticker))
+
+    assert daily_sync.yahoo_daily_history_downloader("BRK.B", date(2024, 1, 1), date(2024, 1, 2)) is frame
+    assert calls == [("Ticker", "BRK-B"), ("history", {
+        "start": "2024-01-01", "end": "2024-01-03", "interval": "1d",
+        "auto_adjust": False, "actions": True, "timeout": 30, "raise_errors": True,
+    })]
+
+
+def test_confirmed_yahoo_missing_symbol_fails_without_opening_provider_circuit(tmp_path, monkeypatch):
+    class YFPricesMissingError(Exception):
+        pass
+    class YFTzMissingError(Exception):
+        pass
+    fake_yf = types.SimpleNamespace(exceptions=types.SimpleNamespace(
+        YFPricesMissingError=YFPricesMissingError, YFTzMissingError=YFTzMissingError,
+    ))
+    monkeypatch.setitem(sys.modules, "yfinance", fake_yf)
+    class Response:
+        status_code = 404
+
+        @staticmethod
+        def json():
+            return {"chart": {"error": {"code": "Not Found"}}}
+    calls = []
+    def diagnostic_get(url, **kwargs):
+        calls.append((url, kwargs))
+        return Response()
+    monkeypatch.setitem(sys.modules, "curl_cffi", types.SimpleNamespace(
+        requests=types.SimpleNamespace(get=diagnostic_get),
+    ))
+    master, root = _master(tmp_path, ("BAD1", "BAD2", "GOOD")), tmp_path / "data"
+    def download(symbol, *_):
+        if symbol == "BAD1":
+            raise YFPricesMissingError()
+        if symbol == "BAD2":
+            raise YFTzMissingError()
+        return _bars(["2024-01-02"])
+
+    result = run_sync(master, root, now=NOW, max_consecutive_failures=1, downloader=download, sleep=lambda _: None)
+    assert result["failed"] == 2 and result["success"] == 1 and not result["circuit_open"]
+    records = [json.loads(line) for line in (root / "manifests" / NAMESPACE / "records.jsonl").read_text().splitlines()]
+    assert [record["error_code"] for record in records if record["status"] == "failed"] == [
+        "symbol_unavailable", "symbol_unavailable"
+    ]
+    assert len(calls) == 2
+    assert all(call[1]["params"] == {"interval": "1d", "range": "5d"} for call in calls)
+
+
+def test_yahoo_rate_limit_error_remains_provider_failure(tmp_path, monkeypatch):
+    class YFRateLimitError(Exception):
+        pass
+    monkeypatch.setitem(sys.modules, "yfinance", types.SimpleNamespace(
+        exceptions=types.SimpleNamespace(YFRateLimitError=YFRateLimitError),
+    ))
+    master, root = _master(tmp_path, ("AAA", "BBB")), tmp_path / "data"
+    result = run_sync(master, root, now=NOW, max_consecutive_failures=1,
+                      downloader=lambda *_: (_ for _ in ()).throw(YFRateLimitError()), sleep=lambda _: None)
+    assert result["failed"] == 1 and result["circuit_open"] and result["deferred"] == 1
+
+
+def test_yahoo_missing_timezone_with_diagnostic_network_failure_still_opens_circuit(tmp_path, monkeypatch):
+    class YFTzMissingError(Exception):
+        pass
+    monkeypatch.setitem(sys.modules, "yfinance", types.SimpleNamespace(
+        exceptions=types.SimpleNamespace(YFTzMissingError=YFTzMissingError),
+    ))
+    def diagnostic_get(*_, **__):
+        raise OSError("network unavailable")
+    monkeypatch.setitem(sys.modules, "curl_cffi", types.SimpleNamespace(
+        requests=types.SimpleNamespace(get=diagnostic_get),
+    ))
+    master, root = _master(tmp_path, ("AAA", "BBB")), tmp_path / "data"
+    result = run_sync(master, root, now=NOW, max_consecutive_failures=1,
+                      downloader=lambda *_: (_ for _ in ()).throw(YFTzMissingError()), sleep=lambda _: None)
+    assert result["failed"] == 1 and result["circuit_open"] and result["deferred"] == 1
+
+
+def test_runtime_budget_defers_without_claiming_attempts(tmp_path):
+    master, root = _master(tmp_path, ("AAA", "BBB")), tmp_path / "data"
+    ticks = iter((0.0, 5.0))
+    result = run_sync(master, root, now=NOW, max_runtime_seconds=1, monotonic=lambda: next(ticks),
+                      downloader=lambda *_: pytest.fail("must not download"), sleep=lambda _: None)
+    assert result["status"] == "partial" and result["runtime_budget_exhausted"]
+    assert result["attempted"] == 0 and result["deferred"] == 2
+    records = [json.loads(line) for line in (root / "manifests" / NAMESPACE / "records.jsonl").read_text().splitlines()]
+    assert {record["symbol"] for record in records} == {"AAA", "BBB"}
+    assert all(record["status"] == "deferred" and record["error_code"] == "runtime_budget_exhausted" for record in records)
+
+
+def test_baseline_cold_symbol_starts_at_legacy_gap_and_never_mixes_series(tmp_path):
+    master, root = _master(tmp_path, ("AAA",)), tmp_path / "data"
+    calls = []
+    baseline = _baseline(tmp_path, {"AAA": "2024-01-05"})
+    run_sync(master, root, start=date(2024, 1, 1), now=NOW, baseline_index=baseline,
+             downloader=lambda _s, a, b: calls.append((a, b)) or _bars([a.isoformat()]), sleep=lambda _: None)
+    assert calls == [(date(2024, 1, 6), date(2024, 1, 9))]
+
+
+def test_baseline_bridges_existing_yahoo_series_until_success_record_covers_gap(tmp_path):
+    master, root = _master(tmp_path, ("AAA",)), tmp_path / "data"
+    baseline = _baseline(tmp_path, {"AAA": "2024-01-05"})
+    run_sync(master, root, start=date(2024, 1, 13), now=datetime(2024, 1, 25, 23, tzinfo=timezone.utc),
+             downloader=lambda *_: _bars(["2024-01-20"]), sleep=lambda _: None)
+    calls = []
+    run_sync(master, root, start=date(2024, 1, 1), now=datetime(2024, 1, 25, 23, tzinfo=timezone.utc),
+             baseline_index=baseline,
+             downloader=lambda _s, a, b: calls.append((a, b)) or _bars(["2024-01-20"]), sleep=lambda _: None)
+    assert calls[0][0] == date(2024, 1, 6)
+    calls.clear()
+    run_sync(master, root, start=date(2024, 1, 1), now=datetime(2024, 1, 25, 23, tzinfo=timezone.utc),
+             baseline_index=baseline,
+             downloader=lambda _s, a, b: calls.append((a, b)) or _bars(["2024-01-20"]), sleep=lambda _: None)
+    assert calls[0][0] == date(2024, 1, 13)
+
+
+def test_baseline_at_target_is_up_to_date_without_yahoo_attempt(tmp_path):
+    master, root = _master(tmp_path, ("AAA",)), tmp_path / "data"
+    baseline = _baseline(tmp_path, {"AAA": "2024-01-09"})
+    result = run_sync(master, root, now=NOW, baseline_index=baseline,
+                      downloader=lambda *_: pytest.fail("must not download"), sleep=lambda _: None)
+    assert result["status"] == "success" and result["already_current"] == 1 and result["attempted"] == 0
+    record = json.loads((root / "manifests" / NAMESPACE / "records.jsonl").read_text())
+    assert record["status"] == "up_to_date"
+
+
+def test_baseline_future_or_invalid_schema_fails_closed(tmp_path):
+    master, root = _master(tmp_path, ("AAA",)), tmp_path / "data"
+    future = _baseline(tmp_path, {"AAA": "2024-01-11"})
+    with pytest.raises(ValueError, match="future"):
+        run_sync(master, root, now=NOW, baseline_index=future, sleep=lambda _: None)
+    invalid = tmp_path / "invalid.json"
+    invalid.write_text('{"schema_version":"other","symbols":{}}', encoding="utf-8")
+    with pytest.raises(ValueError, match="schema"):
+        run_sync(master, root, now=NOW, baseline_index=invalid, sleep=lambda _: None)
+
+
+def test_timezone_shifted_yahoo_day_revises_legacy_midnight_row_without_duplication(tmp_path):
+    master, root = _master(tmp_path, ("AAA",)), tmp_path / "data"
+    current = root / "bars/daily/provider=yfinance/namespace=yahoo-daily-v1" / f"symbol={symbol_key('AAA')}" / "bars.parquet"
+    current.parent.mkdir(parents=True)
+    pd.DataFrame({"date": [pd.Timestamp("2024-01-02")], "symbol": ["AAA"],
+                  "open": [10.0], "high": [11.0], "low": [9.0], "close": [10.5],
+                  "adj_close": [10.5], "volume": [5], "dividends": [0.0], "stock_splits": [0.0],
+                  "source": ["yfinance"], "adjustment_status": ["legacy"], "feed": [""]}).to_parquet(current, index=False)
+    raw = _bars(["2024-01-02"])
+    raw.index = pd.DatetimeIndex(raw.index, tz="America/New_York", name="Date")
+    raw.loc[:, "Close"] = 99.0
+    raw.loc[:, "High"] = 100.0
+    result = run_sync(master, root, start=date(2024, 1, 1), now=NOW,
+                      downloader=lambda *_: raw, sleep=lambda _: None)
+    stored = pd.read_parquet(current)
+    archives = list((root / "reference" / NAMESPACE).glob("*/*.parquet"))
+    assert result["success"] == 1 and len(stored) == 1
+    assert stored.iloc[0].date == pd.Timestamp("2024-01-02") and stored.iloc[0].close == 99.0
+    assert len(archives) == 1 and len(pd.read_parquet(archives[0])) == 1

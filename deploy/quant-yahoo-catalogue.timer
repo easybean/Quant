@@ -1,0 +1,10 @@
+[Unit]
+Description=Publish acquired Yahoo series to browser every five minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=5min
+Unit=quant-yahoo-catalogue.service
+
+[Install]
+WantedBy=timers.target

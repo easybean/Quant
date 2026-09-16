@@ -8,6 +8,7 @@ from quant_data.daily_quote_browser import (
     build_us_daily_browser_catalogue,
     read_us_daily_bars,
     search_us_daily_series,
+    refresh_yahoo_browser_catalogue,
 )
 
 
@@ -71,3 +72,31 @@ def test_api_returns_422_for_bad_browser_request_and_no_raw_path(monkeypatch, tm
     bars = client.get("/api/v1/market-data/us-daily/bars", params={"series_id": search.json()["items"][0]["series_id"], "start": "2024-01-02", "end": "2024-01-04"})
     assert bars.status_code == 200
     assert "raw_relative_path" not in bars.text
+
+
+def test_yahoo_refresh_preserves_other_sources_and_is_idempotent(tmp_path):
+    root = _root(tmp_path)
+    path = root / "bars/daily/provider=yfinance/namespace=yahoo-daily-v1/symbol=AAA-cb1ad211/bars.parquet"
+    path.parent.mkdir(parents=True)
+    pd.DataFrame({"date": ["2024-01-05"], "open": [10], "high": [11], "low": [9],
+        "close": [10], "volume": [100], "source": ["yfinance"],
+        "adjustment_status": ["raw_ohlc_with_adjusted_close_and_actions"]}).to_parquet(path, index=False)
+    assert refresh_yahoo_browser_catalogue(root)["yahoo_series"] == 1
+    assert refresh_yahoo_browser_catalogue(root)["series"] == 2
+    items = search_us_daily_series("AAA", data_root=root)["items"]
+    assert items[0]["provider"] == "yfinance" and items[1]["provider"] == "alpaca"
+    assert read_us_daily_bars(items[0]["series_id"], "2024-01-05", "2024-01-05", data_root=root)["returned_rows"] == 1
+    path.write_bytes(b"invalid parquet")
+    result = refresh_yahoo_browser_catalogue(root)
+    assert result["rejected_yahoo_files"] == 1 and result["series"] == 1
+
+
+def test_yahoo_refresh_refuses_to_overwrite_invalid_catalogue(tmp_path):
+    root = _root(tmp_path)
+    path = root / "catalogue/us-daily-browser-v1.json"
+    path.write_text('{"schema_version":"wrong","series":[]}', encoding="utf-8")
+    old = path.read_bytes()
+    from quant_data.daily_quote_browser import DailyQuoteUnavailable
+    with pytest.raises(DailyQuoteUnavailable):
+        refresh_yahoo_browser_catalogue(root)
+    assert path.read_bytes() == old

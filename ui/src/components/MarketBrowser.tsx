@@ -3,52 +3,71 @@ import { AlertCircle, BarChart3, LoaderCircle, Search, ShieldAlert } from 'lucid
 import { CandlestickSeries, ColorType, CrosshairMode, HistogramSeries, createChart, type CandlestickData, type Time } from 'lightweight-charts'
 import { fetchDailyBars, searchDailySeries, type DailyBar, type DailyBarsResponse, type DailySeries } from '../api'
 
-const defaultStart = '2026-01-01'
-const defaultEnd = '2026-08-31'
+type HistoryPeriod = 'month' | 'quarter' | 'year' | 'all'
+const periods: [HistoryPeriod, string][] = [['month', '1个月'], ['quarter', '3个月'], ['year', '1年'], ['all', '全部']]
+
+async function fetchHistory(series: DailySeries, period: HistoryPeriod): Promise<DailyBarsResponse> {
+  const last = Date.parse(series.last_date)
+  const first = Date.parse(series.first_date)
+  if (!Number.isFinite(first) || !Number.isFinite(last) || first > last) throw new Error('该来源的行情覆盖日期无效')
+  const day = 86400000
+  const span = period === 'month' ? 30 : period === 'quarter' ? 90 : 365
+  const start = period === 'all' ? first : Math.max(first, last - span * day)
+  const bars: DailyBar[] = []
+  let result: DailyBarsResponse | null = null
+  // The UI has no user-entered cutoff; retain the API's bounded chunk contract.
+  for (let cursor = start; cursor <= last; cursor += 366 * day) {
+    const end = Math.min(last, cursor + 365 * day)
+    result = await fetchDailyBars(series.series_id, new Date(cursor).toISOString().slice(0, 10), new Date(end).toISOString().slice(0, 10), new AbortController().signal)
+    bars.push(...result.bars)
+  }
+  if (!result) throw new Error('没有可读取的行情区间')
+  return { ...result, bars, returned_rows: bars.length, requested_range: { start: new Date(start).toISOString().slice(0, 10), end: series.last_date } }
+}
 
 export function MarketBrowser() {
   const [query, setQuery] = useState('SPY')
   const [items, setItems] = useState<DailySeries[]>([])
   const [selected, setSelected] = useState<DailySeries | null>(null)
-  const [start, setStart] = useState(defaultStart)
-  const [end, setEnd] = useState(defaultEnd)
+  const [period, setPeriod] = useState<HistoryPeriod>('year')
   const [data, setData] = useState<DailyBarsResponse | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [searched, setSearched] = useState(false)
 
   async function search() {
+    if (loading) return
     const value = query.trim().toUpperCase()
-    if (!value) return
+    if (!/^[A-Z0-9._-]{1,32}$/.test(value)) { setError('请输入有效证券代码，例如 TSLA。'); return }
     setLoading(true); setError(''); setData(null); setSearched(true)
     try {
       const found = await searchDailySeries(value, new AbortController().signal)
       setItems(found); setSelected(found[0] ?? null)
-      if (found[0]) setData(await fetchDailyBars(found[0].series_id, start, end, new AbortController().signal))
+      if (found[0]) setData(await fetchHistory(found[0], period))
     } catch (reason) { setError(reason instanceof Error ? reason.message : '行情浏览暂不可用') }
     finally { setLoading(false) }
   }
-  async function loadSeries(series: DailySeries) {
+  async function loadSeries(series: DailySeries, nextPeriod: HistoryPeriod = period) {
+    if (loading) return
     setSelected(series); setLoading(true); setError(''); setData(null)
-    try { setData(await fetchDailyBars(series.series_id, start, end, new AbortController().signal)) }
+    try { setData(await fetchHistory(series, nextPeriod)) }
     catch (reason) { setError(reason instanceof Error ? reason.message : '原始日线暂不可用') }
     finally { setLoading(false) }
   }
-  async function reloadRange() { if (selected) await loadSeries(selected) }
+  async function changePeriod(nextPeriod: HistoryPeriod) { setPeriod(nextPeriod); if (selected) await loadSeries(selected, nextPeriod) }
   const title = useMemo(() => data ? `${data.series.symbol} · ${data.series.provider}/${data.series.namespace}` : '选择一个来源序列', [data])
 
   return <div className="market-browser-page">
     <section className="page-heading"><div><p className="eyebrow">市场与数据 · 只读原始日线</p><h1>行情浏览</h1><p>仅浏览已有美股 raw 日线。相同代码的不同来源保持独立，不能据此推断总回报或完整市场覆盖。</p></div><span className="static-boundary">只读 · 原始/未复权</span></section>
-    <section className="quote-controls" aria-label="日线搜索与日期范围">
-      <label><Search size={16}/><input value={query} onChange={event => setQuery(event.target.value.toUpperCase())} maxLength={32} placeholder="输入证券代码，如 SPY" aria-label="搜索证券代码" onKeyDown={event => { if (event.key === 'Enter') void search() }} /></label>
-      <label>开始<input type="date" value={start} onChange={event => setStart(event.target.value)} /></label>
-      <label>结束<input type="date" value={end} onChange={event => setEnd(event.target.value)} /></label>
+    <section className="quote-controls" aria-label="日线搜索与显示周期">
+      <label><Search size={16}/><span className="required-mark" aria-hidden="true">*</span><input required value={query} onChange={event => setQuery(event.target.value.toUpperCase())} maxLength={32} placeholder="输入证券代码，如 SPY" aria-label="搜索证券代码（必填）" onKeyDown={event => { if (event.key === 'Enter') void search() }} /></label>
+      <label>显示周期<select value={period} disabled={loading} onChange={event => void changePeriod(event.target.value as HistoryPeriod)}>{periods.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
       <button type="button" className="quote-primary" disabled={loading} onClick={() => void search()}>{loading ? '读取中…' : '搜索日线'}</button>
-      {selected ? <button type="button" className="quote-secondary" disabled={loading} onClick={() => void reloadRange()}>更新区间</button> : null}
+      {selected ? <button type="button" className="quote-secondary" disabled={loading} onClick={() => void search()}>刷新行情</button> : null}
     </section>
-    {error ? <section className="empty-state wide"><AlertCircle size={23}/><strong>无法读取日线</strong><p>{error}</p></section> : loading ? <section className="empty-state wide"><LoaderCircle size={23} className="animate-spin"/><strong>正在读取一个来源序列</strong><p>查询受证券、日期和 300 行上限保护，不会扫描全部行情文件。</p></section> : <section className="quote-grid">
+    {error ? <section className="empty-state wide"><AlertCircle size={23}/><strong>无法读取日线</strong><p>{error}</p></section> : loading ? <section className="empty-state wide"><LoaderCircle size={23} className="animate-spin"/><strong>正在读取行情</strong><p>自动读取该来源的最新日期；全部历史分段加载，不会扫描全部行情文件。</p></section> : <section className="quote-grid">
       <aside className="quote-series"><header><strong>搜索结果</strong><span>{items.length} 个来源序列</span></header>{items.length ? items.map(item => <button type="button" key={item.series_id} className={selected?.series_id === item.series_id ? 'is-active' : ''} onClick={() => void loadSeries(item)}><strong>{item.symbol}</strong><span>{item.provider} · {item.namespace}</span><small>{item.first_date} — {item.last_date}</small></button>) : <p>{searched ? '没有匹配的已索引日线。' : '输入代码后搜索；不会遍历服务器目录。'}</p>}</aside>
-      <article className="quote-panel"><header><div><h2>{title}</h2><p>{data ? `${data.returned_rows} / ${data.max_returned_rows} 根日线 · ${data.requested_range.start} 至 ${data.requested_range.end}` : '搜索后选择一个独立来源序列。'}</p></div><BarChart3 size={18}/></header>{data ? <><CandleChart bars={data.bars}/><div className="quote-meta"><span>来源：{data.source.join('、') || '未记录'}</span><span>价格口径：原始/未复权（{data.adjustment_status.join('、') || '未记录'}）</span></div><div className="boundary-callout"><ShieldAlert size={17}/><p>{data.quality_warning} {data.limitations.join(' ')}</p></div></> : <div className="empty-state"><Search size={22}/><strong>尚未选择日线</strong><p>无数据时不会使用演示 K 线替代。</p></div>}</article>
+      <article className="quote-panel"><header><div><h2>{title}</h2><p>{data ? `${data.returned_rows} 根日线 · ${data.requested_range.start} 至 ${data.requested_range.end}` : '搜索后选择一个独立来源序列。'}</p></div><BarChart3 size={18}/></header>{data ? <><CandleChart bars={data.bars}/><div className="quote-meta"><span>来源：{data.source.join('、') || '未记录'}</span><span>价格口径：原始/未复权（{data.adjustment_status.join('、') || '未记录'}）</span></div><div className="boundary-callout"><ShieldAlert size={17}/><p>{data.quality_warning} {data.limitations.join(' ')}</p></div></> : <div className="empty-state"><Search size={22}/><strong>尚未选择日线</strong><p>无数据时不会使用演示 K 线替代。</p></div>}</article>
     </section>}
   </div>
 }
