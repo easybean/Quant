@@ -77,6 +77,9 @@ def test_visual_strategy_drafts_are_versioned_and_non_executable(monkeypatch, tm
     updated = client.put(f"/api/v1/visual-strategy-drafts/{draft['id']}", json={**definition, "rebalance_frequency": "weekly"})
     assert updated.json()["version"] == 2
     assert [row["version"] for row in client.get(f"/api/v1/visual-strategy-drafts/{draft['id']}/history").json()["items"]] == [2, 1]
+    assert client.get(f"/api/v1/visual-strategy-drafts/{draft['id']}/history").json()["items"][1]["definition"]["rebalance_frequency"] == "monthly"
+    assert client.get("/api/v1/visual-strategy-drafts/missing/history").status_code == 404
+    assert client.post(f"/api/v1/visual-strategy-drafts/{draft['id']}/run", json={}).status_code == 404
 
 
 def test_global_risk_policy_drafts_are_validated_and_versioned(monkeypatch, tmp_path):

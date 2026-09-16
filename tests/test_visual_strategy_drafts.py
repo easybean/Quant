@@ -37,3 +37,19 @@ def test_visual_strategy_rejects_unknown_or_unrunnable_factor(tmp_path):
     try: store.save(invalid)
     except VisualStrategyDraftInputError: pass
     else: raise AssertionError("expected unknown field to be rejected")
+
+
+def test_visual_strategy_rejects_nonfinite_duplicate_and_unknown_pool_version(tmp_path):
+    pools, pool = _pool(tmp_path)
+    store = VisualStrategyDraftStore(tmp_path, pools); store.initialize()
+    cases = [
+        ("asset_pool must reference", lambda value: value["asset_pool"].update(asset_pool_version=2)),
+        ("finite number", lambda value: value["signal_rules"][0].update(threshold=float("nan"))),
+        ("duplicate signal rules", lambda value: value["signal_rules"].append(dict(value["signal_rules"][0]))),
+        ("allocation.target_weight", lambda value: value["allocation"].update(target_weight=float("inf"))),
+    ]
+    for expected, mutate in cases:
+        invalid = _payload(pool); mutate(invalid)
+        try: store.save(invalid)
+        except VisualStrategyDraftInputError as exc: assert expected in str(exc)
+        else: raise AssertionError(f"expected {expected} to be rejected")
