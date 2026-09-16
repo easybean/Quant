@@ -1,12 +1,17 @@
 [Unit]
 Description=Quant Yahoo daily bars sync (unqualified research input)
-After=network-online.target
+Requires=mihomo.service
+After=network-online.target mihomo.service
 
 [Service]
 Type=oneshot
 WorkingDirectory=/home/davidou/quant/app
 Environment=PYTHONPATH=/home/davidou/quant/app/src
-ExecStart=/home/davidou/quant/venv/bin/python -m quant_data.daily_sync --security-master /home/davidou/quant/data/metadata/security_master.parquet --data-root /home/davidou/quant/data --start 2016-01-01 --request-delay 2 --max-consecutive-failures 3 --max-backfill-symbols 100
+Environment=HTTP_PROXY=http://127.0.0.1:7890
+Environment=HTTPS_PROXY=http://127.0.0.1:7890
+Environment=NO_PROXY=localhost,127.0.0.1,::1
+ExecStartPre=/usr/bin/timeout 20 /bin/sh -c "until /home/davidou/quant/venv/bin/python -c 'import socket; socket.create_connection((\"127.0.0.1\",7890),timeout=1).close()' 2>/dev/null; do sleep 1; done"
+ExecStart=/home/davidou/quant/venv/bin/python -m quant_data.daily_sync --security-master /home/davidou/quant/data/metadata/security_master.parquet --data-root /home/davidou/quant/data --start 2016-01-01 --bootstrap-lookback-days 14 --request-delay 2 --max-consecutive-failures 3 --max-backfill-symbols 100
 TimeoutStartSec=20h
 SuccessExitStatus=2
 Nice=10

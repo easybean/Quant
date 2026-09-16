@@ -155,6 +155,7 @@ def run_sync(
     request_delay: float = 1.0,
     max_consecutive_failures: int = 3,
     max_backfill_symbols: int = 0,
+    bootstrap_lookback_days: int = 0,
     downloader: Callable[[str, date, date], pd.DataFrame] = default_yfinance_downloader,
     now: datetime | None = None,
     sleep: Callable[[float], None] = time.sleep,
@@ -168,7 +169,7 @@ def run_sync(
     target = end or allowed_end
     if start > target:
         raise ValueError("start_after_target_end")
-    if min(max_symbols, max_backfill_symbols) < 0 or max_consecutive_failures < 1:
+    if min(max_symbols, max_backfill_symbols, bootstrap_lookback_days) < 0 or max_consecutive_failures < 1:
         raise ValueError("limits must be non-negative and max_consecutive_failures positive")
     if not math.isfinite(request_delay) or request_delay < 0:
         raise ValueError("request_delay_must_be_finite_non_negative")
@@ -189,9 +190,17 @@ def run_sync(
         summary: dict[str, Any] = {"run_id": run_id, "namespace": NAMESPACE, "status": "running",
             "started_at": datetime.now(timezone.utc).isoformat(), "requested": 0, "attempted": 0,
             "success": 0, "failed": 0, "deferred": 0, "max_data_date": None, "circuit_open": False,
+            "bootstrap_lookback_days": bootstrap_lookback_days,
+            "bootstrap_window": (
+                "requested start for cold symbols" if bootstrap_lookback_days == 0
+                else f"last {bootstrap_lookback_days} calendar days ending at target for cold symbols"
+            ),
             "unqualified": True, "warning": "Yahoo data is not row-level PIT or research-qualified; price adjustment semantics require separate verification and may include historical split adjustments."}
-        _atomic_json(manifest / f"run-{run_id}.json", summary)
-        _atomic_json(manifest / "latest.json", summary)
+        def write_progress() -> None:
+            _atomic_json(manifest / f"run-{run_id}.json", summary)
+            _atomic_json(manifest / "latest.json", summary)
+
+        write_progress()
 
         master = _read_master(security_master)
         required = {"symbol", "status", "asset_type"}
@@ -210,7 +219,7 @@ def run_sync(
             deferred += max(0, len(symbols) - max_symbols)
             symbols = symbols[:max_symbols]
 
-        summary.update({"status": "success", "requested": requested, "deferred": deferred})
+        summary.update({"requested": requested, "deferred": deferred})
         if not symbols:
             summary.update({"status": "failed", "error_code": "no_eligible_active_stock_or_etf_symbols"})
         consecutive = 0
@@ -234,6 +243,8 @@ def run_sync(
                 if consecutive >= max_consecutive_failures:
                     summary["circuit_open"] = True
                     summary["deferred"] += len(symbols) - index - 1
+                write_progress()
+                if consecutive >= max_consecutive_failures:
                     break
                 continue
             if existing is None:
@@ -244,7 +255,9 @@ def run_sync(
                     summary["deferred"] += 1
                     continue
                 limited_backfills += 1
-                request_start = start
+                request_start = start if bootstrap_lookback_days == 0 else max(
+                    start, target - timedelta(days=bootstrap_lookback_days - 1)
+                )
             else:
                 current_max = pd.to_datetime(existing["date"], errors="raise").max().date()
                 request_start = max(start, current_max - timedelta(days=7))
@@ -292,17 +305,21 @@ def run_sync(
             if consecutive >= max_consecutive_failures:
                 summary["circuit_open"] = True
                 summary["deferred"] += len(symbols) - index - 1
+            write_progress()
+            if consecutive >= max_consecutive_failures:
                 break
             if request_delay > 0 and index < len(symbols) - 1:
                 sleep(request_delay)
-        if summary["failed"] or summary["circuit_open"]:
-            summary["status"] = "failed"
-        elif summary["deferred"]:
-            summary["status"] = "partial"
-            summary["bootstrap_partial"] = bool(max_backfill_symbols)
+        if summary["status"] != "failed":
+            if summary["failed"] or summary["circuit_open"]:
+                summary["status"] = "failed"
+            elif summary["deferred"]:
+                summary["status"] = "partial"
+                summary["bootstrap_partial"] = bool(max_backfill_symbols)
+            else:
+                summary["status"] = "success"
         summary["finished_at"] = datetime.now(timezone.utc).isoformat()
-        _atomic_json(manifest / f"run-{run_id}.json", summary)
-        _atomic_json(manifest / "latest.json", summary)
+        write_progress()
         return summary
     finally:
         try:
@@ -319,6 +336,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--end", type=date.fromisoformat)
     parser.add_argument("--max-symbols", type=int, default=0)
     parser.add_argument("--max-backfill-symbols", type=int, default=0)
+    parser.add_argument("--bootstrap-lookback-days", type=int, default=0)
     parser.add_argument("--request-delay", type=float, default=1.0)
     parser.add_argument("--max-consecutive-failures", type=int, default=3)
     args = parser.parse_args(argv)

@@ -74,6 +74,59 @@ def test_incremental_window_is_seven_days_not_original_start(tmp_path):
     assert calls[0][0] == date(2024, 1, 13)
 
 
+def test_bootstrap_lookback_only_limits_cold_symbols(tmp_path):
+    master, root = _master(tmp_path, ("COLD", "LIVE")), tmp_path / "data"
+    base = root / "bars/daily/provider=yfinance/namespace=yahoo-daily-v1" / f"symbol={symbol_key('LIVE')}" / "bars.parquet"
+    base.parent.mkdir(parents=True)
+    pd.DataFrame({"date": [pd.Timestamp("2024-01-05")], "source": ["yfinance"],
+                  "open": [1.0], "high": [2.0], "low": [0.5], "close": [1.5], "volume": [1]}).to_parquet(base, index=False)
+    calls = {}
+    result = run_sync(master, root, start=date(2024, 1, 1), now=NOW, bootstrap_lookback_days=3,
+                      downloader=lambda symbol, start, end: calls.setdefault(symbol, (start, end)) and _bars([start.isoformat()]),
+                      sleep=lambda _: None)
+    assert calls["COLD"][0] == date(2024, 1, 7)
+    assert calls["LIVE"][0] == date(2024, 1, 1)  # established series retains seven-day correction probe
+    assert result["bootstrap_lookback_days"] == 3
+    assert "last 3 calendar days" in result["bootstrap_window"]
+    assert result["success"] == 2 and result["status"] == "success"
+
+
+def test_attempt_checkpoints_remain_running_until_final_status(tmp_path):
+    master, root = _master(tmp_path, ("AAA", "BBB")), tmp_path / "data"
+    snapshots = []
+    def download(*_):
+        latest = json.loads((root / "manifests" / NAMESPACE / "latest.json").read_text())
+        snapshots.append(latest)
+        return _bars(["2024-01-02"])
+    result = run_sync(master, root, now=NOW, downloader=download, sleep=lambda _: None)
+    latest = json.loads((root / "manifests" / NAMESPACE / "latest.json").read_text())
+    assert [snapshot["status"] for snapshot in snapshots] == ["running", "running"]
+    assert snapshots[1]["attempted"] == 1 and snapshots[1]["success"] == 1
+    assert result["status"] == latest["status"] == "success"
+
+
+def test_failed_current_file_attempt_checkpoints_running_summary(tmp_path):
+    master, root = _master(tmp_path, ("AAA", "BBB")), tmp_path / "data"
+    corrupt = root / "bars/daily/provider=yfinance/namespace=yahoo-daily-v1" / f"symbol={symbol_key('AAA')}" / "bars.parquet"
+    corrupt.parent.mkdir(parents=True)
+    corrupt.write_bytes(b"not parquet")
+    seen = []
+    def download(symbol, *_):
+        if symbol == "BBB":
+            seen.append(json.loads((root / "manifests" / NAMESPACE / "latest.json").read_text()))
+        return _bars(["2024-01-02"])
+    result = run_sync(master, root, now=NOW, downloader=download, sleep=lambda _: None)
+    assert seen[0]["status"] == "running"
+    assert seen[0]["attempted"] == seen[0]["failed"] == 1
+    assert result["status"] == "failed"
+
+
+def test_rejects_negative_bootstrap_lookback(tmp_path):
+    master, root = _master(tmp_path, ("AAA",)), tmp_path / "data"
+    with pytest.raises(ValueError, match="limits"):
+        run_sync(master, root, now=NOW, bootstrap_lookback_days=-1)
+
+
 def test_invalid_values_and_corrupt_current_fail_without_overwrite(tmp_path):
     master, root = _master(tmp_path, ("AAA",)), tmp_path / "data"
     invalid = _bars(["2024-01-02"])
