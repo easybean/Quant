@@ -25,6 +25,9 @@ DAILY_BROWSER_SCHEMA_VERSION = "us-daily-browser-v1"
 MAX_SEARCH_RESULTS = 20
 MAX_CALENDAR_DAYS = 366
 MAX_RETURNED_ROWS = 300
+# A display composite is deliberately small and bounded.  It is not a general
+# purpose cross-provider reconciliation mechanism.
+MAX_COMPOSITE_MEMBERS = 8
 _QUERY = re.compile(r"[A-Z0-9._-]{1,32}")
 _SERIES = re.compile(r"[A-Za-z0-9._:-]{3,180}")
 _RAW_FILE = re.compile(r"(?:provider=[A-Za-z0-9._-]+/)?(?:namespace=[A-Za-z0-9._-]+/)?symbol=[A-Za-z0-9._-]+/bars\.parquet")
@@ -192,12 +195,63 @@ def search_us_daily_series(query: str, limit: int = 10, *, data_root: str | Path
     if not isinstance(limit, int) or not 1 <= limit <= MAX_SEARCH_RESULTS:
         raise DailyQuoteInputError(f"limit must be between 1 and {MAX_SEARCH_RESULTS}")
     entries = _load_catalogue(_data_root(data_root))
-    matches = [entry for entry in entries if normalized in entry["symbol"]][:limit]
-    return {"schema_version": DAILY_BROWSER_SCHEMA_VERSION, "items": [_public_series(entry) for entry in matches], "limit": limit}
+    composites = _canonical_catalogue(entries)
+    # A ticker lookup should not be pushed behind a fuzzy match (for example
+    # ``AA`` behind ``AAPL``).  The limit is deliberately applied to stocks,
+    # rather than to underlying provider files.
+    exact = [item for item in composites if item["symbol"] == normalized]
+    partial = [item for item in composites if item["symbol"] != normalized and normalized in item["symbol"]]
+    matches = exact + partial
+    return {"schema_version": DAILY_BROWSER_SCHEMA_VERSION, "items": [_public_series(entry) for entry in matches[:limit]], "limit": limit}
 
 
 def _public_series(entry: dict[str, Any]) -> dict[str, object]:
-    return {key: entry.get(key, "") for key in ("series_id", "symbol", "provider", "namespace", "first_date", "last_date", "rows", "quality_warning")}
+    return {key: entry.get(key, "") for key in ("series_id", "symbol", "provider", "namespace", "first_date", "last_date", "rows", "rows_estimated", "quality_warning")}
+
+
+def _entry_symbol_key(entry: dict[str, Any]) -> str:
+    """Return the catalogue identity, never the user-visible ticker alone."""
+    return str(entry["series_id"]).rsplit(":", 1)[-1]
+
+
+def _is_yahoo(entry: dict[str, Any]) -> bool:
+    return entry.get("provider") == "yfinance" and entry.get("namespace") == "yahoo-daily-v1"
+
+
+def _as_date(value: object) -> date | None:
+    try:
+        return date.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _canonical_catalogue(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Build public stock views from the fixed catalogue, without opening bars."""
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for entry in entries:
+        grouped.setdefault((_entry_symbol_key(entry), entry["symbol"]), []).append(entry)
+    composites: list[dict[str, Any]] = []
+    warning = ("仅用于行情浏览：逐行保留原始来源；跨来源复权口径未经验证，"
+               "不得用于回测、正式研究快照或交易决策。")
+    for (symbol_key, symbol), members in grouped.items():
+        base = min(members, key=_base_priority)
+        base_first, base_last = _as_date(base.get("first_date")), _as_date(base.get("last_date"))
+        # These fields must describe the files the reader can actually use:
+        # an unrelated second non-Yahoo feed is intentionally not stitched.
+        yahoo_tail = [member for member in members if _is_yahoo(member) and member is not base
+                      and base_last is not None and (_as_date(member.get("last_date")) or date.min) > base_last]
+        usable_lasts = [base_last] + [_as_date(member.get("last_date")) for member in yahoo_tail]
+        composites.append({
+            "series_id": f"us-daily:{symbol_key}", "symbol": symbol,
+            "provider": "display_composite", "namespace": "us-daily-view-v1",
+            "first_date": base_first.isoformat() if base_first else "",
+            "last_date": max(item for item in usable_lasts if item).isoformat() if any(usable_lasts) else "",
+            # Catalogue counts cannot account for Yahoo/base date overlap.
+            "rows": int(base.get("rows") or 0) + sum(int(member.get("rows") or 0) for member in yahoo_tail),
+            "rows_estimated": True,
+            "quality_warning": warning, "_members": members,
+        })
+    return sorted(composites, key=lambda item: (str(item["symbol"]), str(item["series_id"])))
 
 
 def _bounded_dates(start: str, end: str) -> tuple[date, date]:
@@ -217,41 +271,116 @@ def read_us_daily_bars(series_id: str, start: str, end: str, *, data_root: str |
         raise DailyQuoteInputError("series_id is invalid")
     start_date, end_date = _bounded_dates(start, end)
     root = _data_root(data_root)
-    selected = next((entry for entry in _load_catalogue(root) if entry["series_id"] == series_id), None)
-    if selected is None:
+    entries = _load_catalogue(root)
+    selected = next((entry for entry in _canonical_catalogue(entries) if entry["series_id"] == series_id), None)
+    # Keep direct catalogue ids readable for old clients.  New search results
+    # always use the canonical stock id above.
+    legacy_selected = next((entry for entry in entries if entry["series_id"] == series_id), None)
+    if selected is None and legacy_selected is None:
         raise DailyQuoteInputError("series_id is not in the fixed daily catalogue")
+    if legacy_selected is not None and selected is None:
+        return _read_one_series(legacy_selected, start_date, end_date, root)
+    assert selected is not None
+    members = list(selected["_members"])
+    if not 1 <= len(members) <= MAX_COMPOSITE_MEMBERS:
+        raise DailyQuoteUnavailable("该行情展示视图包含过多来源文件，拒绝读取")
+    return _read_composite(selected, members, start_date, end_date, root)
+
+
+def _read_frame(entry: dict[str, Any], root: Path) -> pd.DataFrame:
     raw_root = (root / "bars" / "daily").resolve()
-    path = (raw_root / selected["raw_relative_path"]).resolve()
+    path = (raw_root / entry["raw_relative_path"]).resolve()
     if raw_root not in path.parents or not path.is_file():
         raise DailyQuoteUnavailable("所选原始日线文件不可读取")
     try:
         frame = pd.read_parquet(path, columns=list(_PUBLIC_COLUMNS))
     except (OSError, ValueError, KeyError, ImportError) as exc:
         raise DailyQuoteUnavailable("所选原始日线数据不可读取") from exc
-    if "date" not in frame:
+    if "date" not in frame or any(column not in frame for column in _PUBLIC_COLUMNS):
         raise DailyQuoteUnavailable("所选原始日线缺少日期字段")
-    dates = pd.to_datetime(frame["date"], errors="coerce").dt.date
-    frame = frame.loc[dates.notna() & (dates >= start_date) & (dates <= end_date)].copy()
+    dates = pd.to_datetime(frame["date"], errors="coerce")
+    if dates.isna().any():
+        raise DailyQuoteUnavailable("所选原始日线日期无效")
+    frame = frame.copy()
+    frame["date"] = dates.dt.normalize()
+    return frame
+
+
+def _bars_from_frame(frame: pd.DataFrame, start_date: date, end_date: date) -> list[dict[str, object]]:
+    dates = frame["date"].dt.date
+    frame = frame.loc[(dates >= start_date) & (dates <= end_date)].copy()
     if len(frame) > MAX_RETURNED_ROWS:
         raise DailyQuoteUnavailable("所选日期区间超过日线返回上限")
-    frame["date"] = pd.to_datetime(frame["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    frame["date"] = frame["date"].dt.strftime("%Y-%m-%d")
     for column in ("open", "high", "low", "close", "volume"):
-        if column not in frame:
-            raise DailyQuoteUnavailable("所选原始日线缺少 OHLCV 字段")
         frame[column] = pd.to_numeric(frame[column], errors="coerce")
     frame = frame.sort_values("date", kind="stable")
-    bars = [{key: (None if pd.isna(value) else value.item() if hasattr(value, "item") else value) for key, value in row.items()} for row in frame[list(_PUBLIC_COLUMNS)].to_dict("records")]
+    return [{key: (None if pd.isna(value) else value.item() if hasattr(value, "item") else value) for key, value in row.items()} for row in frame[list(_PUBLIC_COLUMNS)].to_dict("records")]
+
+
+def _response(selected: dict[str, Any], bars: list[dict[str, object]], start_date: date, end_date: date, *, composite: bool) -> dict[str, object]:
+    frame = pd.DataFrame(bars)
     source_values = sorted({str(value) for value in frame.get("source", pd.Series(dtype=str)).dropna()})
     adjustment_values = sorted({str(value) for value in frame.get("adjustment_status", pd.Series(dtype=str)).dropna()})
-    return {
+    response: dict[str, object] = {
         "schema_version": DAILY_BROWSER_SCHEMA_VERSION, "series": _public_series(selected),
         "requested_range": {"start": start_date.isoformat(), "end": end_date.isoformat()},
         "returned_rows": len(bars), "max_returned_rows": MAX_RETURNED_ROWS,
         "source": source_values, "adjustment_status": adjustment_values,
-        "price_basis": "raw_or_unadjusted", "quality_warning": selected.get("quality_warning", ""),
+        "price_basis": "display_composite_unverified" if composite else "raw_or_unadjusted", "quality_warning": selected.get("quality_warning", ""),
         "limitations": ["原始/未复权价格，不代表总回报。", "来源序列未合并；缺失日期不等同于停牌。", "公司行为与退市最终回报未处理。"],
         "bars": bars,
     }
+    if composite:
+        response["limitations"] = ["仅用于行情浏览；跨来源复权口径与总回报未经验证，不得用于回测或正式研究快照。", "基准历史优先保留；Yahoo 仅追加基准最后日期之后的日期。", "公司行为、退市与 PIT 适用性均未验证。"]
+        response["source_segments"] = _source_segments(bars)
+    return response
+
+
+def _read_one_series(selected: dict[str, Any], start_date: date, end_date: date, root: Path) -> dict[str, object]:
+    return _response(selected, _bars_from_frame(_read_frame(selected, root), start_date, end_date), start_date, end_date, composite=False)
+
+
+def _base_priority(entry: dict[str, Any]) -> tuple[int, int, str, str]:
+    # The migrated legacy catalogue has provider/namespace ``unknown`` and is
+    # the historic Nasdaq file.  Otherwise prefer a non-Yahoo source with the
+    # broadest advertised span; all ties are deterministic.
+    legacy = entry.get("provider") == "unknown" and str(entry.get("raw_relative_path", "")).startswith("symbol=")
+    start, end = _as_date(entry.get("first_date")), _as_date(entry.get("last_date"))
+    span = (end - start).days if start and end else -1
+    return (0 if legacy else 1 if not _is_yahoo(entry) else 2, -span, str(entry["series_id"]), str(entry["raw_relative_path"]))
+
+
+def _read_composite(selected: dict[str, Any], members: list[dict[str, Any]], start_date: date, end_date: date, root: Path) -> dict[str, object]:
+    base = min(members, key=_base_priority)
+    base_frame = _read_frame(base, root)
+    # This is deliberately the full base history, not the requested interval:
+    # chunked UI requests must choose the same source at the boundary.
+    base_last = base_frame["date"].max()
+    merged = base_frame.copy()
+    for member in sorted((item for item in members if _is_yahoo(item) and item is not base), key=lambda item: str(item["series_id"])):
+        yahoo = _read_frame(member, root)
+        merged = pd.concat([merged, yahoo.loc[yahoo["date"] > base_last]], ignore_index=True)
+    # A base always wins an overlap.  Yahoo rows were appended only after its
+    # final date, but retain stable de-duplication as a defensive invariant.
+    merged = merged.sort_values("date", kind="stable").drop_duplicates("date", keep="first")
+    bars = _bars_from_frame(merged, start_date, end_date)
+    if len(bars) > MAX_RETURNED_ROWS:
+        raise DailyQuoteUnavailable("所选日期区间超过日线返回上限")
+    return _response(selected, bars, start_date, end_date, composite=True)
+
+
+def _source_segments(bars: list[dict[str, object]]) -> list[dict[str, object]]:
+    segments: list[dict[str, object]] = []
+    for bar in bars:
+        signature = (bar.get("source"), bar.get("adjustment_status"))
+        if segments and (segments[-1]["source"], segments[-1]["adjustment_status"]) == signature:
+            segments[-1]["end"] = bar["date"]
+            segments[-1]["rows"] = int(segments[-1]["rows"]) + 1
+        else:
+            segments.append({"start": bar["date"], "end": bar["date"], "rows": 1,
+                             "source": bar.get("source"), "adjustment_status": bar.get("adjustment_status")})
+    return segments
 
 
 if __name__ == "__main__":

@@ -14,15 +14,19 @@ async function fetchHistory(series: DailySeries, period: HistoryPeriod): Promise
   const span = period === 'month' ? 30 : period === 'quarter' ? 90 : 365
   const start = period === 'all' ? first : Math.max(first, last - span * day)
   const bars: DailyBar[] = []
+  const sources = new Set<string>()
+  const adjustments = new Set<string>()
   let result: DailyBarsResponse | null = null
   // The UI has no user-entered cutoff; retain the API's bounded chunk contract.
   for (let cursor = start; cursor <= last; cursor += 366 * day) {
     const end = Math.min(last, cursor + 365 * day)
     result = await fetchDailyBars(series.series_id, new Date(cursor).toISOString().slice(0, 10), new Date(end).toISOString().slice(0, 10), new AbortController().signal)
     bars.push(...result.bars)
+    result.source.forEach(value => sources.add(value))
+    result.adjustment_status.forEach(value => adjustments.add(value))
   }
   if (!result) throw new Error('没有可读取的行情区间')
-  return { ...result, bars, returned_rows: bars.length, requested_range: { start: new Date(start).toISOString().slice(0, 10), end: series.last_date } }
+  return { ...result, bars, source: [...sources], adjustment_status: [...adjustments], returned_rows: bars.length, requested_range: { start: new Date(start).toISOString().slice(0, 10), end: series.last_date } }
 }
 
 export function MarketBrowser() {
@@ -55,22 +59,24 @@ export function MarketBrowser() {
     finally { setLoading(false) }
   }
   async function changePeriod(nextPeriod: HistoryPeriod) { setPeriod(nextPeriod); if (selected) await loadSeries(selected, nextPeriod) }
-  const title = useMemo(() => data ? `${data.series.symbol} · ${data.series.provider}/${data.series.namespace}` : '选择一个来源序列', [data])
+  const title = useMemo(() => data ? `${data.series.symbol} · 日线行情` : '选择一只股票', [data])
 
   return <div className="market-browser-page">
-    <section className="page-heading"><div><p className="eyebrow">市场与数据 · 只读原始日线</p><h1>行情浏览</h1><p>仅浏览已有美股 raw 日线。相同代码的不同来源保持独立，不能据此推断总回报或完整市场覆盖。</p></div><span className="static-boundary">只读 · 原始/未复权</span></section>
+    <section className="page-heading"><div><p className="eyebrow">市场与数据 · 日线行情</p><h1>行情浏览</h1><p>同一只股票统一展示历史行情与每日更新；原始来源保留。浏览行情不代表复权、总回报或回测数据已验证。</p></div><span className="static-boundary">只读 · 行情浏览</span></section>
     <section className="quote-controls" aria-label="日线搜索与显示周期">
       <label><Search size={16}/><span className="required-mark" aria-hidden="true">*</span><input required value={query} onChange={event => setQuery(event.target.value.toUpperCase())} maxLength={32} placeholder="输入证券代码，如 SPY" aria-label="搜索证券代码（必填）" onKeyDown={event => { if (event.key === 'Enter') void search() }} /></label>
       <label>显示周期<select value={period} disabled={loading} onChange={event => void changePeriod(event.target.value as HistoryPeriod)}>{periods.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
       <button type="button" className="quote-primary" disabled={loading} onClick={() => void search()}>{loading ? '读取中…' : '搜索日线'}</button>
       {selected ? <button type="button" className="quote-secondary" disabled={loading} onClick={() => void search()}>刷新行情</button> : null}
     </section>
-    {error ? <section className="empty-state wide"><AlertCircle size={23}/><strong>无法读取日线</strong><p>{error}</p></section> : loading ? <section className="empty-state wide"><LoaderCircle size={23} className="animate-spin"/><strong>正在读取行情</strong><p>自动读取该来源的最新日期；全部历史分段加载，不会扫描全部行情文件。</p></section> : <section className="quote-grid">
-      <aside className="quote-series"><header><strong>搜索结果</strong><span>{items.length} 个来源序列</span></header>{items.length ? items.map(item => <button type="button" key={item.series_id} className={selected?.series_id === item.series_id ? 'is-active' : ''} onClick={() => void loadSeries(item)}><strong>{item.symbol}</strong><span>{item.provider} · {item.namespace}</span><small>{item.first_date} — {item.last_date}</small></button>) : <p>{searched ? '没有匹配的已索引日线。' : '输入代码后搜索；不会遍历服务器目录。'}</p>}</aside>
-      <article className="quote-panel"><header><div><h2>{title}</h2><p>{data ? `${data.returned_rows} 根日线 · ${data.requested_range.start} 至 ${data.requested_range.end}` : '搜索后选择一个独立来源序列。'}</p></div><BarChart3 size={18}/></header>{data ? <><CandleChart bars={data.bars}/><div className="quote-meta"><span>来源：{data.source.join('、') || '未记录'}</span><span>价格口径：原始/未复权（{data.adjustment_status.join('、') || '未记录'}）</span></div><div className="boundary-callout"><ShieldAlert size={17}/><p>{data.quality_warning} {data.limitations.join(' ')}</p></div></> : <div className="empty-state"><Search size={22}/><strong>尚未选择日线</strong><p>无数据时不会使用演示 K 线替代。</p></div>}</article>
+    {error ? <section className="empty-state wide"><AlertCircle size={23}/><strong>无法读取日线</strong><p>{error}</p></section> : loading ? <section className="empty-state wide"><LoaderCircle size={23} className="animate-spin"/><strong>正在读取行情</strong><p>自动读取这只股票的最新行情；全部历史分段加载。</p></section> : <section className="quote-grid">
+      <aside className="quote-series"><header><strong>搜索结果</strong><span>{items.length} 只股票</span></header>{items.length ? items.map(item => <button type="button" key={item.series_id} className={selected?.series_id === item.series_id ? 'is-active' : ''} onClick={() => void loadSeries(item)}><strong>{item.symbol}</strong><span>日线行情</span><small>{item.first_date} — {item.last_date}</small></button>) : <p>{searched ? '没有匹配的已索引股票。' : '输入股票代码后搜索。'}</p>}</aside>
+      <article className="quote-panel"><header><div><h2>{title}</h2><p>{data ? `${data.returned_rows} 根日线 · ${data.requested_range.start} 至 ${data.requested_range.end}` : '搜索后选择一只股票。'}</p></div><BarChart3 size={18}/></header>{data ? <><CandleChart bars={data.bars}/><div className="quote-meta"><span>数据来源：{data.source.map(sourceName).join('、') || '未记录'}</span><span>口径标记：{data.adjustment_status.join('、') || '未记录'}（未经统一复权验证）</span></div><div className="boundary-callout"><ShieldAlert size={17}/><p>{data.quality_warning} {data.limitations.join(' ')}</p></div></> : <div className="empty-state"><Search size={22}/><strong>尚未选择股票</strong><p>无数据时不会使用演示 K 线替代。</p></div>}</article>
     </section>}
   </div>
 }
+
+function sourceName(value: string) { return value === 'nasdaq_web_unadjusted' ? 'Nasdaq（历史）' : value === 'yfinance' ? 'Yahoo（更新）' : value }
 
 function CandleChart({ bars }: { bars: DailyBar[] }) {
   const hostRef = useRef<HTMLDivElement>(null)
@@ -109,7 +115,7 @@ function CandleChart({ bars }: { bars: DailyBar[] }) {
 
   if (!bars.length) return <div className="empty-state"><BarChart3 size={22}/><strong>该日期区间没有已记录日线</strong><p>这不等同于停牌或没有交易；请查看来源覆盖范围。</p></div>
   if (!valid.length) return <div className="empty-state"><AlertCircle size={22}/><strong>该区间日线缺少可绘制 OHLC</strong><p>质量问题已保留，系统不会补造价格。</p></div>
-  return <div className="quote-chart-shell"><div className="quote-crosshair" aria-live="polite"><strong>{formatTime(crosshair?.time)}</strong><span>开 {formatNumber(crosshair?.open)}</span><span>高 {formatNumber(crosshair?.high)}</span><span>低 {formatNumber(crosshair?.low)}</span><span>收 {formatNumber(crosshair?.close)}</span><span>量 {formatVolume(volumeForTime(bars, crosshair?.time))}</span></div><div ref={hostRef} className="quote-chart" aria-label="可缩放、可平移的原始日线蜡烛图与成交量"/><p className="quote-attribution">图表基于 <a href="https://www.tradingview.com/lightweight-charts/" target="_blank" rel="noreferrer">TradingView Lightweight Charts™</a>；行情只来自内网只读 API。</p></div>
+  return <div className="quote-chart-shell"><div className="quote-crosshair" aria-live="polite"><strong>{formatTime(crosshair?.time)}</strong><span>开 {formatNumber(crosshair?.open)}</span><span>高 {formatNumber(crosshair?.high)}</span><span>低 {formatNumber(crosshair?.low)}</span><span>收 {formatNumber(crosshair?.close)}</span><span>量 {formatVolume(volumeForTime(bars, crosshair?.time))}</span><span>来源 {sourceName(bars.find(bar => bar.date === formatTime(crosshair?.time))?.source || '未记录')}</span></div><div ref={hostRef} className="quote-chart" aria-label="可缩放、可平移的日线蜡烛图与成交量"/><p className="quote-attribution">图表基于 <a href="https://www.tradingview.com/lightweight-charts/" target="_blank" rel="noreferrer">TradingView Lightweight Charts™</a>；行情只来自内网只读 API。</p></div>
 }
 
 function toCandle(bar: DailyBar | undefined): CandlestickData<Time> | null {

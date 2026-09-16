@@ -5,6 +5,7 @@ import pytest
 
 from quant_data.daily_quote_browser import (
     DailyQuoteInputError,
+    DailyQuoteUnavailable,
     build_us_daily_browser_catalogue,
     read_us_daily_bars,
     search_us_daily_series,
@@ -41,7 +42,7 @@ def test_catalogue_search_and_one_raw_series_read_are_bounded(tmp_path):
     assert "path" not in json.dumps(search)
     result = read_us_daily_bars(search["items"][0]["series_id"], "2024-01-02", "2024-01-04", data_root=root)
     assert result["returned_rows"] == 3
-    assert result["price_basis"] == "raw_or_unadjusted"
+    assert result["price_basis"] == "display_composite_unverified"
     assert result["bars"][0]["close"] == 10.5
     assert "总回报" in result["limitations"][0]
     assert "path" not in json.dumps(result)
@@ -84,7 +85,7 @@ def test_yahoo_refresh_preserves_other_sources_and_is_idempotent(tmp_path):
     assert refresh_yahoo_browser_catalogue(root)["yahoo_series"] == 1
     assert refresh_yahoo_browser_catalogue(root)["series"] == 2
     items = search_us_daily_series("AAA", data_root=root)["items"]
-    assert items[0]["provider"] == "yfinance" and items[1]["provider"] == "alpaca"
+    assert len(items) == 1 and items[0]["provider"] == "display_composite"
     assert read_us_daily_bars(items[0]["series_id"], "2024-01-05", "2024-01-05", data_root=root)["returned_rows"] == 1
     path.write_bytes(b"invalid parquet")
     result = refresh_yahoo_browser_catalogue(root)
@@ -100,3 +101,52 @@ def test_yahoo_refresh_refuses_to_overwrite_invalid_catalogue(tmp_path):
     with pytest.raises(DailyQuoteUnavailable):
         refresh_yahoo_browser_catalogue(root)
     assert path.read_bytes() == old
+
+
+def test_canonical_view_stitches_only_yahoo_tail_and_keeps_overlap_base(tmp_path):
+    root = _root(tmp_path)
+    legacy = root / "bars/daily/symbol=TSLA-0f3c1e2d/bars.parquet"
+    legacy.parent.mkdir(parents=True)
+    pd.DataFrame({
+        "date": ["2026-08-30", "2026-08-31"], "open": [1, 2], "high": [2, 3], "low": [0, 1], "close": [1, 2],
+        "volume": [10, 20], "source": ["nasdaq_web_unadjusted"] * 2, "adjustment_status": ["unadjusted"] * 2,
+    }).to_parquet(legacy, index=False)
+    yahoo = root / "bars/daily/provider=yfinance/namespace=yahoo-daily-v1/symbol=TSLA-0f3c1e2d/bars.parquet"
+    yahoo.parent.mkdir(parents=True)
+    pd.DataFrame({
+        "date": ["2026-08-31", "2026-09-01", "2026-09-02"], "open": [99, 3, 4], "high": [99, 4, 5], "low": [99, 2, 3], "close": [99, 3, 4],
+        "volume": [99, 30, 40], "source": ["yfinance"] * 3, "adjustment_status": ["yahoo_adjusted"] * 3,
+    }).to_parquet(yahoo, index=False)
+    catalogue = root / "catalogue/us-daily-browser-v1.json"
+    payload = json.loads(catalogue.read_text())
+    payload["series"].extend([
+        {"series_id": "unknown:unknown:TSLA-0f3c1e2d", "symbol": "TSLA", "provider": "unknown", "namespace": "unknown",
+         "raw_relative_path": "symbol=TSLA-0f3c1e2d/bars.parquet", "first_date": "2026-08-30", "last_date": "2026-08-31", "rows": 2},
+        {"series_id": "yfinance:yahoo-daily-v1:TSLA-0f3c1e2d", "symbol": "TSLA", "provider": "yfinance", "namespace": "yahoo-daily-v1",
+         "raw_relative_path": "provider=yfinance/namespace=yahoo-daily-v1/symbol=TSLA-0f3c1e2d/bars.parquet", "first_date": "2026-08-31", "last_date": "2026-09-02", "rows": 3},
+    ])
+    catalogue.write_text(json.dumps(payload), encoding="utf-8")
+    items = search_us_daily_series("TSLA", data_root=root)["items"]
+    assert len(items) == 1
+    assert items[0]["first_date"] == "2026-08-30" and items[0]["last_date"] == "2026-09-02"
+    result = read_us_daily_bars(items[0]["series_id"], "2026-08-30", "2026-09-02", data_root=root)
+    assert [bar["date"] for bar in result["bars"]] == ["2026-08-30", "2026-08-31", "2026-09-01", "2026-09-02"]
+    assert result["bars"][1]["close"] == 2
+    assert [bar["source"] for bar in result["bars"]] == ["nasdaq_web_unadjusted", "nasdaq_web_unadjusted", "yfinance", "yfinance"]
+    assert result["source_segments"][0]["end"] == "2026-08-31"
+
+
+def test_legacy_series_id_remains_readable_and_member_cap_is_fail_closed(tmp_path):
+    root = _root(tmp_path)
+    old_id = "alpaca:default:AAA-cb1ad211"
+    assert read_us_daily_bars(old_id, "2024-01-02", "2024-01-02", data_root=root)["price_basis"] == "raw_or_unadjusted"
+    catalogue = root / "catalogue/us-daily-browser-v1.json"
+    payload = json.loads(catalogue.read_text())
+    original = payload["series"][0]
+    for number in range(8):
+        duplicate = dict(original)
+        duplicate["series_id"] = f"p{number}:n{number}:AAA-cb1ad211"
+        payload["series"].append(duplicate)
+    catalogue.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(DailyQuoteUnavailable, match="过多来源"):
+        read_us_daily_bars("us-daily:AAA-cb1ad211", "2024-01-02", "2024-01-02", data_root=root)
