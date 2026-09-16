@@ -2,6 +2,16 @@
 
 个人使用的量化研究与模拟交易项目（初始化阶段）。当前第一阶段建立可复现的美股日线数据与回测链路，不连接真实下单。
 
+### 研究快照进入审查前的检查
+
+资产池配置不代表数据合格。固定快照须先核对身份、历史成员、原始价格、可用时点、公司行为/退市声明及文件完整性，详见 [P3-03A](docs/tasks/P3-03A.md)。只读运行：
+
+```bash
+PYTHONPATH=src .venv/bin/python -m quant_data.research_snapshot /path/to/snapshot/manifest.json
+```
+
+`ready_for_review=true` 只表示可进入进一步审查，`qualified` 始终为 false；该检查不能证明行级 PIT 或覆盖完整性，也不解除真实回测门禁。
+
 ## 第一阶段数据管道
 
 目标是下载 2016 年至今的美股日 K，并把当前上市与已退市证券都纳入证券清单。行情来自 yfinance；证券清单可从 Alpha Vantage `LISTING_STATUS` 下载，也可导入已经下载好的 CSV。
