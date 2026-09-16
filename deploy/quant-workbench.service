@@ -1,0 +1,17 @@
+[Unit]
+Description=Quant research workbench (internal Streamlit UI)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/davidou/quant/app
+Environment=QUANT_DATA_ROOT=/home/davidou/quant/data
+Environment=QUANT_REPORTS_ROOT=/home/davidou/quant/reports
+Environment=ALPACA_CREDENTIAL_FILE=/home/davidou/alpacakey
+ExecStart=/home/davidou/quant/venv/bin/python -m streamlit run src/quant_data/workbench.py --server.address 0.0.0.0 --server.port 8501 --server.headless true --browser.gatherUsageStats false
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

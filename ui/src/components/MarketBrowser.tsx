@@ -1,0 +1,103 @@
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { AlertCircle, BarChart3, LoaderCircle, Search, ShieldAlert } from 'lucide-react'
+import { CandlestickSeries, ColorType, CrosshairMode, HistogramSeries, createChart, type CandlestickData, type Time } from 'lightweight-charts'
+import { fetchDailyBars, searchDailySeries, type DailyBar, type DailyBarsResponse, type DailySeries } from '../api'
+
+const defaultStart = '2026-01-01'
+const defaultEnd = '2026-08-31'
+
+export function MarketBrowser() {
+  const [query, setQuery] = useState('SPY')
+  const [items, setItems] = useState<DailySeries[]>([])
+  const [selected, setSelected] = useState<DailySeries | null>(null)
+  const [start, setStart] = useState(defaultStart)
+  const [end, setEnd] = useState(defaultEnd)
+  const [data, setData] = useState<DailyBarsResponse | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [searched, setSearched] = useState(false)
+
+  async function search() {
+    const value = query.trim().toUpperCase()
+    if (!value) return
+    setLoading(true); setError(''); setData(null); setSearched(true)
+    try {
+      const found = await searchDailySeries(value, new AbortController().signal)
+      setItems(found); setSelected(found[0] ?? null)
+      if (found[0]) setData(await fetchDailyBars(found[0].series_id, start, end, new AbortController().signal))
+    } catch (reason) { setError(reason instanceof Error ? reason.message : '行情浏览暂不可用') }
+    finally { setLoading(false) }
+  }
+  async function loadSeries(series: DailySeries) {
+    setSelected(series); setLoading(true); setError(''); setData(null)
+    try { setData(await fetchDailyBars(series.series_id, start, end, new AbortController().signal)) }
+    catch (reason) { setError(reason instanceof Error ? reason.message : '原始日线暂不可用') }
+    finally { setLoading(false) }
+  }
+  async function reloadRange() { if (selected) await loadSeries(selected) }
+  const title = useMemo(() => data ? `${data.series.symbol} · ${data.series.provider}/${data.series.namespace}` : '选择一个来源序列', [data])
+
+  return <div className="market-browser-page">
+    <section className="page-heading"><div><p className="eyebrow">市场与数据 · 只读原始日线</p><h1>行情浏览</h1><p>仅浏览已有美股 raw 日线。相同代码的不同来源保持独立，不能据此推断总回报或完整市场覆盖。</p></div><span className="static-boundary">只读 · 原始/未复权</span></section>
+    <section className="quote-controls" aria-label="日线搜索与日期范围">
+      <label><Search size={16}/><input value={query} onChange={event => setQuery(event.target.value.toUpperCase())} maxLength={32} placeholder="输入证券代码，如 SPY" aria-label="搜索证券代码" onKeyDown={event => { if (event.key === 'Enter') void search() }} /></label>
+      <label>开始<input type="date" value={start} onChange={event => setStart(event.target.value)} /></label>
+      <label>结束<input type="date" value={end} onChange={event => setEnd(event.target.value)} /></label>
+      <button type="button" className="quote-primary" disabled={loading} onClick={() => void search()}>{loading ? '读取中…' : '搜索日线'}</button>
+      {selected ? <button type="button" className="quote-secondary" disabled={loading} onClick={() => void reloadRange()}>更新区间</button> : null}
+    </section>
+    {error ? <section className="empty-state wide"><AlertCircle size={23}/><strong>无法读取日线</strong><p>{error}</p></section> : loading ? <section className="empty-state wide"><LoaderCircle size={23} className="animate-spin"/><strong>正在读取一个来源序列</strong><p>查询受证券、日期和 300 行上限保护，不会扫描全部行情文件。</p></section> : <section className="quote-grid">
+      <aside className="quote-series"><header><strong>搜索结果</strong><span>{items.length} 个来源序列</span></header>{items.length ? items.map(item => <button type="button" key={item.series_id} className={selected?.series_id === item.series_id ? 'is-active' : ''} onClick={() => void loadSeries(item)}><strong>{item.symbol}</strong><span>{item.provider} · {item.namespace}</span><small>{item.first_date} — {item.last_date}</small></button>) : <p>{searched ? '没有匹配的已索引日线。' : '输入代码后搜索；不会遍历服务器目录。'}</p>}</aside>
+      <article className="quote-panel"><header><div><h2>{title}</h2><p>{data ? `${data.returned_rows} / ${data.max_returned_rows} 根日线 · ${data.requested_range.start} 至 ${data.requested_range.end}` : '搜索后选择一个独立来源序列。'}</p></div><BarChart3 size={18}/></header>{data ? <><CandleChart bars={data.bars}/><div className="quote-meta"><span>来源：{data.source.join('、') || '未记录'}</span><span>价格口径：原始/未复权（{data.adjustment_status.join('、') || '未记录'}）</span></div><div className="boundary-callout"><ShieldAlert size={17}/><p>{data.quality_warning} {data.limitations.join(' ')}</p></div></> : <div className="empty-state"><Search size={22}/><strong>尚未选择日线</strong><p>无数据时不会使用演示 K 线替代。</p></div>}</article>
+    </section>}
+  </div>
+}
+
+function CandleChart({ bars }: { bars: DailyBar[] }) {
+  const hostRef = useRef<HTMLDivElement>(null)
+  const [dark, setDark] = useState(() => document.documentElement.dataset.theme === 'dark')
+  const valid = useMemo(() => bars.filter(bar => [bar.open, bar.high, bar.low, bar.close].every(value => typeof value === 'number')), [bars])
+  const [crosshair, setCrosshair] = useState<CandlestickData<Time> | null>(() => toCandle(valid.at(-1)))
+
+  useEffect(() => {
+    const root = document.documentElement
+    const observer = new MutationObserver(() => setDark(root.dataset.theme === 'dark'))
+    observer.observe(root, { attributes: true, attributeFilter: ['data-theme'] })
+    return () => observer.disconnect()
+  }, [])
+  useEffect(() => setCrosshair(toCandle(valid.at(-1))), [valid])
+  useEffect(() => {
+    const host = hostRef.current
+    if (!host || !valid.length) return
+    const palette = dark
+      ? { background: '#17212d', text: '#9eafc2', grid: '#2a3949', border: '#344557', up: '#26a69a', down: '#ef5350', volumeUp: 'rgba(38, 166, 154, .45)', volumeDown: 'rgba(239, 83, 80, .45)' }
+      : { background: '#ffffff', text: '#64748b', grid: '#edf1f5', border: '#dbe3ec', up: '#0f9b8e', down: '#c25b57', volumeUp: 'rgba(15, 155, 142, .35)', volumeDown: 'rgba(194, 91, 87, .35)' }
+    const chart = createChart(host, { width: host.clientWidth, height: 390, layout: { background: { type: ColorType.Solid, color: palette.background }, textColor: palette.text, attributionLogo: true }, grid: { vertLines: { color: palette.grid }, horzLines: { color: palette.grid } }, rightPriceScale: { borderColor: palette.border }, timeScale: { borderColor: palette.border, timeVisible: false, secondsVisible: false, rightOffset: 4, barSpacing: 8, minBarSpacing: 3 }, crosshair: { mode: CrosshairMode.Normal, vertLine: { color: palette.border, labelBackgroundColor: palette.up }, horzLine: { color: palette.border, labelBackgroundColor: palette.up } }, handleScroll: true, handleScale: true })
+    const candles = chart.addSeries(CandlestickSeries, { upColor: palette.up, downColor: palette.down, borderVisible: false, wickUpColor: palette.up, wickDownColor: palette.down, priceLineVisible: false })
+    const volume = chart.addSeries(HistogramSeries, { priceFormat: { type: 'volume' }, priceScaleId: '', lastValueVisible: false, priceLineVisible: false })
+    candles.setData(valid.map(toCandle).filter((bar): bar is CandlestickData<Time> => bar !== null))
+    volume.setData(valid.flatMap(bar => typeof bar.volume === 'number' ? [{ time: bar.date as Time, value: bar.volume, color: (bar.close as number) >= (bar.open as number) ? palette.volumeUp : palette.volumeDown }] : []))
+    candles.priceScale().applyOptions({ scaleMargins: { top: .08, bottom: .28 } })
+    volume.priceScale().applyOptions({ scaleMargins: { top: .76, bottom: 0 } })
+    chart.timeScale().fitContent()
+    const onCrosshairMove = (event: { seriesData: Map<unknown, unknown> }) => { const bar = event.seriesData.get(candles) as CandlestickData<Time> | undefined; if (bar) setCrosshair(bar) }
+    chart.subscribeCrosshairMove(onCrosshairMove)
+    const resize = () => chart.applyOptions({ width: host.clientWidth })
+    const resizeObserver = new ResizeObserver(resize)
+    resizeObserver.observe(host)
+    return () => { resizeObserver.disconnect(); chart.unsubscribeCrosshairMove(onCrosshairMove); chart.remove() }
+  }, [dark, valid])
+
+  if (!bars.length) return <div className="empty-state"><BarChart3 size={22}/><strong>该日期区间没有已记录日线</strong><p>这不等同于停牌或没有交易；请查看来源覆盖范围。</p></div>
+  if (!valid.length) return <div className="empty-state"><AlertCircle size={22}/><strong>该区间日线缺少可绘制 OHLC</strong><p>质量问题已保留，系统不会补造价格。</p></div>
+  return <div className="quote-chart-shell"><div className="quote-crosshair" aria-live="polite"><strong>{formatTime(crosshair?.time)}</strong><span>开 {formatNumber(crosshair?.open)}</span><span>高 {formatNumber(crosshair?.high)}</span><span>低 {formatNumber(crosshair?.low)}</span><span>收 {formatNumber(crosshair?.close)}</span><span>量 {formatVolume(volumeForTime(bars, crosshair?.time))}</span></div><div ref={hostRef} className="quote-chart" aria-label="可缩放、可平移的原始日线蜡烛图与成交量"/><p className="quote-attribution">图表基于 <a href="https://www.tradingview.com/lightweight-charts/" target="_blank" rel="noreferrer">TradingView Lightweight Charts™</a>；行情只来自内网只读 API。</p></div>
+}
+
+function toCandle(bar: DailyBar | undefined): CandlestickData<Time> | null {
+  if (!bar || [bar.open, bar.high, bar.low, bar.close].some(value => typeof value !== 'number')) return null
+  return { time: bar.date as Time, open: bar.open as number, high: bar.high as number, low: bar.low as number, close: bar.close as number }
+}
+function formatTime(time: Time | undefined) { if (typeof time === 'string') return time; if (typeof time === 'number') return new Date(time * 1000).toISOString().slice(0, 10); return time ? `${time.year}-${String(time.month).padStart(2, '0')}-${String(time.day).padStart(2, '0')}` : '—' }
+function formatNumber(value: number | null | undefined) { return typeof value === 'number' ? value.toFixed(2) : '—' }
+function formatVolume(value: number | null | undefined) { return typeof value === 'number' ? new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 2 }).format(value) : '—' }
+function volumeForTime(bars: DailyBar[], time: Time | undefined) { return bars.find(bar => bar.date === time)?.volume }

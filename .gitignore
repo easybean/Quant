@@ -1,0 +1,23 @@
+.DS_Store
+.env
+.venv/
+.venv-*/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.idea/
+.vscode/
+data/
+logs/
+artifacts/
+secrets/
+config/pipeline.toml
+
+# Local Codex/document build intermediates and generated delivery artifacts.
+.codex-*/
+output/
+
+# Legacy research showcase retained locally pending provenance/classification.
+showcase/

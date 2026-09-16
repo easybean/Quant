@@ -1,0 +1,21 @@
+# Paths are resolved relative to the current working directory.
+data_root = "data"
+security_master = "data/metadata/security_master.parquet"
+provider = "yfinance" # set to "nasdaq" when Yahoo is blocked by the server exit IP
+alpaca_feed = "iex" # use "sip" only when the Alpaca subscription authorizes it
+# Set a distinct value for every concurrently running downloader. Empty keeps
+# compatibility with the original data/manifests location.
+state_namespace = ""
+start = "2016-01-01"
+# Empty means today (inclusive). yfinance receives the following day because
+# its `end` argument is exclusive.
+end = ""
+batch_size = 100
+retries = 3
+retry_base_seconds = 2.0
+# Delay after every symbol. Keep this non-zero for a full-universe free feed.
+request_delay_seconds = 0.5
+
+# Never put the key itself in this file. The Alpha Vantage adapter reads it
+# from this environment variable.
+alpha_vantage_api_key_env = "ALPHAVANTAGE_API_KEY"

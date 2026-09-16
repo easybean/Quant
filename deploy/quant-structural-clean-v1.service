@@ -1,0 +1,18 @@
+[Unit]
+Description=Quant structural daily-bar cleaning v1 (derived data only)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/davidou/quant/app
+Nice=10
+# A completed or partial v1 output must never be overwritten by a restart.
+ExecStartPre=/usr/bin/test ! -e /home/davidou/quant/data/derived/structural-v1
+ExecStartPre=/usr/bin/test ! -e /home/davidou/quant/data/audit/structural-v1
+ExecStart=/home/davidou/quant/venv/bin/quant-data clean --raw-root /home/davidou/quant/data/bars/daily --output /home/davidou/quant/data/derived/structural-v1 --audit-output /home/davidou/quant/data/audit/structural-v1
+StandardOutput=append:/home/davidou/quant/logs/quant-structural-clean-v1.service.log
+StandardError=append:/home/davidou/quant/logs/quant-structural-clean-v1.service.log
+
+[Install]
+WantedBy=default.target

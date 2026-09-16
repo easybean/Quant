@@ -1,0 +1,14 @@
+[Unit]
+Description=Quant workbench read-only API (internal)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/davidou/quant/app
+Environment=QUANT_UI_ORIGINS=http://192.168.1.132:8510
+ExecStart=/home/davidou/quant/venv/bin/python -m uvicorn quant_data.api:app --host 0.0.0.0 --port 8511 --workers 1
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,53 @@
+import { useEffect, useState } from 'react'
+import { Dashboard } from './components/Dashboard'
+import { DataCatalogue } from './components/DataCatalogue'
+import { FactorCatalogue } from './components/FactorCatalogue'
+import { FactorResearch } from './components/FactorResearch'
+import { Layout } from './components/Layout'
+import { PlaceholderPage } from './components/PlaceholderPage'
+import { TaskOverview } from './components/TaskOverview'
+import { BacktestWizard } from './components/BacktestWizard'
+import { StrategyWorkspace } from './components/StrategyWorkspace'
+import { VisualStrategyWorkspace } from './components/VisualStrategyWorkspace'
+import { InstrumentWorkspace } from './components/UniverseWorkspace'
+import { AssetPoolWorkspace } from './components/AssetPoolWorkspace'
+import { RiskPolicyWorkspace } from './components/RiskPolicyWorkspace'
+import { DataSourceWorkspace } from './components/DataSourceWorkspace'
+import { PaperAccountWorkspace } from './components/PaperAccountWorkspace'
+import { MarketBrowser } from './components/MarketBrowser'
+import { findNavGroup, findNavItem } from './navigation'
+
+export default function App() {
+  const [activeId, setActiveId] = useState('workbench')
+  const [expandedGroupId, setExpandedGroupId] = useState('overview')
+  const [collapsed, setCollapsed] = useState(false)
+  const [mobileOpen, setMobileOpen] = useState(false)
+  const [theme, setTheme] = useState<'light' | 'dark'>('light')
+  const { group, child } = findNavItem(activeId)
+
+  useEffect(() => { document.documentElement.dataset.theme = theme }, [theme])
+  const navigate = (id: string) => { const item = findNavItem(id); setActiveId(id); setExpandedGroupId(item.group.id); setMobileOpen(false) }
+  const toggleGroup = (id: string) => {
+    const target = findNavGroup(id)
+    setCollapsed(false)
+    navigate(target.children[0].id)
+  }
+  let content
+  if (activeId === 'workbench') content = <Dashboard />
+  else if (activeId === 'market-browser') content = <MarketBrowser />
+  else if (activeId === 'data-catalog') content = <DataCatalogue />
+  else if (activeId === 'factor-catalogue') content = <FactorCatalogue />
+  else if (activeId === 'factor-research') content = <FactorResearch />
+  else if (activeId === 'new-backtest') content = <BacktestWizard />
+  else if (activeId === 'strategy-templates') content = <StrategyWorkspace />
+  else if (activeId === 'my-strategies' || activeId === 'strategy-details') content = <VisualStrategyWorkspace />
+  else if (activeId === 'instruments') content = <InstrumentWorkspace />
+  else if (activeId === 'datasets') content = <AssetPoolWorkspace />
+  else if (activeId === 'risk-rules') content = <RiskPolicyWorkspace />
+  else if (activeId === 'connections') content = <DataSourceWorkspace />
+  else if (activeId === 'paper-accounts' || activeId === 'orders-fills' || activeId === 'cash-ledger') content = <PaperAccountWorkspace />
+  else if (activeId === 'experiments') content = <TaskOverview view="experiments" />
+  else if (activeId === 'backtest-jobs' || activeId === 'resources') content = <TaskOverview view="jobs" />
+  else content = <PlaceholderPage group={group} child={child} />
+  return <Layout activeId={activeId} activeGroup={group} activeChild={child} expandedGroupId={expandedGroupId} collapsed={collapsed} mobileOpen={mobileOpen} theme={theme} onNavigate={navigate} onToggleGroup={toggleGroup} onToggleCollapsed={() => setCollapsed((value) => !value)} onToggleTheme={() => setTheme((value) => value === 'light' ? 'dark' : 'light')} onOpenMenu={() => setMobileOpen(true)} onCloseMobile={() => setMobileOpen(false)}>{content}</Layout>
+}
