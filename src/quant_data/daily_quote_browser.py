@@ -219,7 +219,12 @@ def _is_yahoo(entry: dict[str, Any]) -> bool:
 
 
 def _is_append_source(entry: dict[str, Any]) -> bool:
-    return _is_yahoo(entry) or (entry.get("provider"), entry.get("namespace")) in {("nasdaq", "nasdaq-daily-recovery-v1"), ("yfinance", "yahoo-symbol-recovery-v1")}
+    return _is_yahoo(entry) or (entry.get("provider"), entry.get("namespace")) in {("nasdaq", "nasdaq-daily-recovery-v1"), ("yfinance", "yahoo-symbol-recovery-v1"), ("alpaca", "alpaca-sip-recovery-v1")}
+
+
+def _append_priority(entry: dict[str, Any]) -> tuple[int, str]:
+    priorities = {"yahoo-daily-v1": 0, "yahoo-symbol-recovery-v1": 1, "alpaca-sip-recovery-v1": 2, "nasdaq-daily-recovery-v1": 3}
+    return priorities.get(str(entry.get("namespace")), 4), str(entry["series_id"])
 
 
 def _as_date(value: object) -> date | None:
@@ -362,7 +367,7 @@ def _read_composite(selected: dict[str, Any], members: list[dict[str, Any]], sta
     # chunked UI requests must choose the same source at the boundary.
     base_last = base_frame["date"].max()
     merged = base_frame.copy()
-    for member in sorted((item for item in members if _is_append_source(item) and item is not base), key=lambda item: (not _is_yahoo(item), str(item["series_id"]))):
+    for member in sorted((item for item in members if _is_append_source(item) and item is not base), key=_append_priority):
         yahoo = _read_frame(member, root)
         merged = pd.concat([merged, yahoo.loc[yahoo["date"] > base_last]], ignore_index=True)
     # A base always wins an overlap.  Yahoo rows were appended only after its

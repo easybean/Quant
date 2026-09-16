@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Quant Alpaca SIP recovery queue hourly
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=5m
+AccuracySec=1m
+Persistent=true
+Unit=quant-alpaca-sip-recovery.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,18 @@
+[Unit]
+Description=Quant Alpaca SIP recovery of failed Yahoo daily windows
+Requires=mihomo.service
+After=network-online.target mihomo.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/davidou/quant/app
+Environment=PYTHONPATH=/home/davidou/quant/app/src
+Environment=HTTP_PROXY=http://127.0.0.1:7890
+Environment=HTTPS_PROXY=http://127.0.0.1:7890
+Environment=NO_PROXY=localhost,127.0.0.1,::1
+ExecStartPre=/usr/bin/timeout 20 /bin/sh -c "until /home/davidou/quant/venv/bin/python -c 'import socket; socket.create_connection((\"127.0.0.1\",7890),timeout=1).close()' 2>/dev/null; do sleep 1; done"
+ExecStart=/home/davidou/quant/venv/bin/python -m quant_data.recovery_sync --recovery-provider alpaca --credential-file /home/davidou/alpacakey --security-master /home/davidou/quant/data/metadata/security_master.parquet --data-root /home/davidou/quant/data --request-delay 2 --max-consecutive-failures 3 --max-runtime-seconds 64800
+TimeoutStartSec=20h
+SuccessExitStatus=2
+Nice=10
+UMask=0077

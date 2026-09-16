@@ -3,8 +3,8 @@ import json
 
 import pandas as pd
 
-from quant_data.pipeline import PermanentDownloadError, symbol_key
-from quant_data.recovery_sync import NAMESPACE, run_recovery
+from quant_data.pipeline import FatalProviderError, PermanentDownloadError, symbol_key
+from quant_data.recovery_sync import NAMESPACE, _alpaca_sip_request_wrapper, run_recovery
 
 NOW = datetime(2024, 1, 10, 23, tzinfo=timezone.utc)
 
@@ -88,3 +88,54 @@ def test_permanent_error_does_not_open_circuit_but_network_errors_do(tmp_path):
     master, root = _setup(tmp_path / "two", [_failure("AAA"), _failure("BBB"), _failure("CCC")], {"symbol": ["AAA", "BBB", "CCC"], "status": ["active"] * 3, "asset_type": ["Stock"] * 3})
     result = run_recovery(master, root, now=NOW, downloader=lambda *_: (_ for _ in ()).throw(RuntimeError("network")), request_delay=0)
     assert result["circuit_open"] and result["attempted"] == 3
+
+
+def test_alpaca_uses_independent_namespace_raw_source_and_explicit_asof(tmp_path):
+    master, root = _setup(tmp_path, [_failure()])
+    result = run_recovery(master, root, now=NOW, recovery_provider="alpaca", downloader=lambda *_: _bars())
+    assert result["namespace"] == "alpaca-sip-recovery-v1" and result["success"] == 1
+    record = json.loads((root / "manifests/alpaca-sip-recovery-v1/records.jsonl").read_text())
+    assert record["provider"] == "alpaca" and record["source"] == "alpaca_stock_historical_v2" and record["asof"] == "-"
+    saved = pd.read_parquet(root / "bars/daily/provider=alpaca/namespace=alpaca-sip-recovery-v1" / f"symbol={symbol_key('AAA')}" / "bars.parquet")
+    assert saved["adjustment_status"].eq("raw").all() and saved["dividends"].isna().all()
+    assert not (root / "manifests/nasdaq-daily-recovery-v1/records.jsonl").exists()
+
+
+def test_alpaca_authorization_stops_provider_without_iex_fallback(tmp_path):
+    master, root = _setup(tmp_path, [_failure("AAA"), _failure("BBB")], {"symbol": ["AAA", "BBB"], "status": ["active", "active"], "asset_type": ["Stock", "Stock"]})
+    result = run_recovery(master, root, now=NOW, recovery_provider="alpaca", downloader=lambda *_: (_ for _ in ()).throw(FatalProviderError("authorization")), request_delay=0)
+    assert result["circuit_open"] and result["attempted"] == 1 and result["deferred"] == 1
+
+
+def test_alpaca_keeps_ny_calendar_dates_across_dst_boundary(tmp_path):
+    row = {**_failure(), "requested_start": "2024-03-10", "requested_end": "2024-03-11"}
+    master, root = _setup(tmp_path, [row])
+    calls = []
+    run_recovery(master, root, now=datetime(2024, 3, 12, 23, tzinfo=timezone.utc), recovery_provider="alpaca",
+                 downloader=lambda _symbol, start, end: calls.append((start, end)) or _bars(("2024-03-11",)))
+    assert calls == [(date(2024, 3, 10), date(2024, 3, 11))]
+
+
+def test_alpaca_sip_wrapper_sets_asof_and_ny_utc_boundaries_in_winter_and_dst():
+    calls = []
+    def request_get(*args, **kwargs):
+        calls.append(kwargs); return object()
+    winter = _alpaca_sip_request_wrapper(datetime(2024, 1, 5, 12, tzinfo=timezone.utc), request_get)
+    winter("url", params={"start": "2024-01-02T00:00:00Z", "end": "2024-01-03T00:00:00Z"}, headers={}, timeout=45)
+    summer = _alpaca_sip_request_wrapper(datetime(2024, 7, 5, 12, tzinfo=timezone.utc), request_get)
+    summer("url", params={"start": "2024-07-02T00:00:00Z", "end": "2024-07-03T00:00:00Z"}, headers={}, timeout=45)
+    assert calls[0]["params"] == {"start": "2024-01-02T05:00:00Z", "end": "2024-01-03T05:00:00Z", "asof": "-"}
+    assert calls[1]["params"] == {"start": "2024-07-02T04:00:00Z", "end": "2024-07-03T04:00:00Z", "asof": "-"}
+    assert calls[0]["timeout"] == calls[1]["timeout"] == 30.0
+
+
+def test_alpaca_sip_wrapper_rejects_recent_end_before_network_call():
+    called = []
+    request = _alpaca_sip_request_wrapper(datetime(2024, 7, 3, 4, 10, tzinfo=timezone.utc), lambda *_args, **_kwargs: called.append(True))
+    try:
+        request("url", params={"start": "2024-07-02T00:00:00Z", "end": "2024-07-03T00:00:00Z"}, headers={}, timeout=30)
+    except ValueError as exc:
+        assert str(exc) == "alpaca_end_within_15_minute_delay_window"
+    else:
+        raise AssertionError("recent Alpaca end must be rejected")
+    assert not called

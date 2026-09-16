@@ -28,6 +28,8 @@ PYTHONPATH=src .venv/bin/python -m quant_data.daily_sync \
 
 Yahoo 失败缺口由独立 Nasdaq 补数队列处理：`python -m quant_data.recovery_sync --security-master data/metadata/security_master.parquet --data-root data`。服务器 `quant-daily-recovery.timer` 每小时检查新失败窗；相同失败不热重试。补数严格校验 OHLCV、保留独立来源，缺失成交量不填零，公司行为未知；浏览拼接不解除回测门禁。状态在 `data/manifests/nasdaq-daily-recovery-v1/latest.json`。
 
+当前只推进美股和免费数据。历史 SIP 只读探针与独立补数见 [P1-11](docs/tasks/P1-11.md)：明确 `feed=sip`、`adjustment=raw`、`asof=-`，只查询结束时间早于当前至少 15 分钟的历史窗，不自动降级 IEX、不购买套餐、不调用交易接口。Alpaca 补数使用 `--recovery-provider alpaca --credential-file /服务器安全凭证路径`，独立进度在 `data/manifests/alpaca-sip-recovery-v1/latest.json`。接口访问成功不等于全市场、公司行为、退市回报或研究资格完整。
+
 目标是下载 2016 年至今的美股日 K，并把当前上市与已退市证券都纳入证券清单。行情来自 yfinance；证券清单可从 Alpha Vantage `LISTING_STATUS` 下载，也可导入已经下载好的 CSV。
 
 需要特别说明：退市证券的最后一根日 K 不一定代表投资者最终收到的退市收益。管道会保存缺失和失败信息，但暂时不会猜测现金收购、换股、破产或转 OTC 的最终价值；这部分需要后续的退市事件数据补全。

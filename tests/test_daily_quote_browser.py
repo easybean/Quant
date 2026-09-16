@@ -147,6 +147,18 @@ def test_canonical_view_stitches_only_yahoo_tail_and_keeps_overlap_base(tmp_path
     result = read_us_daily_bars(items[0]["series_id"], "2026-08-30", "2026-09-03", data_root=root)
     assert [bar["close"] for bar in result["bars"]] == [1, 2, 3, 4, 5]
     assert result["bars"][-1]["source"] == "nasdaq_web_unadjusted"
+    alpaca = root / "bars/daily/provider=alpaca/namespace=alpaca-sip-recovery-v1/symbol=TSLA-0f3c1e2d/bars.parquet"
+    alpaca.parent.mkdir(parents=True)
+    frame = pd.read_parquet(recovery).iloc[-1:].copy()
+    frame["close"] = 6
+    frame["source"] = "alpaca_stock_historical_v2"
+    frame["adjustment_status"] = "raw"
+    frame.to_parquet(alpaca, index=False)
+    payload["series"].append({"series_id": "alpaca:alpaca-sip-recovery-v1:TSLA-0f3c1e2d", "symbol": "TSLA", "provider": "alpaca", "namespace": "alpaca-sip-recovery-v1", "raw_relative_path": str(alpaca.relative_to(root / "bars/daily")), "first_date": "2026-09-03", "last_date": "2026-09-03", "rows": 1})
+    catalogue.write_text(json.dumps(payload))
+    result = read_us_daily_bars(items[0]["series_id"], "2026-08-30", "2026-09-03", data_root=root)
+    assert [bar["close"] for bar in result["bars"]] == [1, 2, 3, 4, 6]
+    assert result["bars"][-1]["source"] == "alpaca_stock_historical_v2"
 
 
 def test_legacy_series_id_remains_readable_and_member_cap_is_fail_closed(tmp_path):

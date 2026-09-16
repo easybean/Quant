@@ -1,4 +1,4 @@
-"""Conservative Nasdaq recovery queue for failed Yahoo daily requests.
+"""Source-isolated Nasdaq or delayed Alpaca SIP recovery for Yahoo failures.
 
 This namespace is deliberately separate from Yahoo and is an acquisition view,
 not a repair of Yahoo data nor a research-qualified total-return series.
@@ -14,14 +14,16 @@ import os
 import tempfile
 import time
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time as daytime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
 import pandas as pd
+import requests
+from zoneinfo import ZoneInfo
 
 from .daily_sync import _target_end, _validate_normalized, yahoo_daily_history_downloader
-from .pipeline import PermanentDownloadError, nasdaq_web_downloader, normalize_bars, symbol_key
+from .pipeline import FatalProviderError, PermanentDownloadError, make_alpaca_downloader, nasdaq_web_downloader, normalize_bars, symbol_key
 
 NAMESPACE = "nasdaq-daily-recovery-v1"
 PROVIDER = "nasdaq"
@@ -32,6 +34,9 @@ START_FLOOR = date(2016, 1, 1)
 # Never infer preferred/unit/warrant identity from punctuation alone.
 VERIFIED_YAHOO_ALIASES = {"AAC-U": "AAC-UN", "AAC.U": "AAC-UN", "ABR$D": "ABR-PD", "ABR-P-D": "ABR-PD"}
 ALIAS_NAMESPACE = "yahoo-symbol-recovery-v1"
+ALPACA_NAMESPACE = "alpaca-sip-recovery-v1"
+ALPACA_SOURCE = "alpaca_stock_historical_v2"
+_NY = ZoneInfo("America/New_York")
 
 
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:
@@ -106,8 +111,38 @@ def _error_code(exc: Exception) -> str:
     if "429" in text: return "http_429"
     if "401" in text: return "http_401"
     if "403" in text: return "http_403"
+    if isinstance(exc, FatalProviderError): return "provider_authorization_failed"
     if isinstance(exc, ValueError) and str(exc) in {"response_date_outside_requested_window", "invalid_non_finite_ohlcv", "invalid_ohlcv_range", "invalid_ohlc_consistency"}: return str(exc)
     return "download_or_validation_failed"
+
+
+def _alpaca_sip_request_wrapper(now: datetime, request_get: Callable[..., Any] = requests.get) -> Callable[..., Any]:
+    """Force the free SIP recovery request into explicit NY daily semantics.
+
+    ``make_alpaca_downloader`` emits date-only daily endpoints at UTC midnight.
+    The recovery policy instead makes the day boundary explicit as New York
+    midnight converted to UTC, supplies ``asof=-``, and refuses an end later
+    than the documented delayed-data safety boundary before any HTTP call.
+    """
+    now_utc = (now if now.tzinfo else now.replace(tzinfo=timezone.utc)).astimezone(timezone.utc)
+    cutoff = now_utc - pd.Timedelta(minutes=15)
+
+    def request(url: str, *, params: dict[str, Any], headers: dict[str, str], timeout: float, **kwargs: Any) -> Any:
+        adjusted = dict(params)
+        try:
+            start_day = date.fromisoformat(str(adjusted["start"])[:10])
+            end_day = date.fromisoformat(str(adjusted["end"])[:10])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("alpaca_daily_window_invalid") from exc
+        start_utc = datetime.combine(start_day, daytime.min, tzinfo=_NY).astimezone(timezone.utc)
+        end_utc = datetime.combine(end_day, daytime.min, tzinfo=_NY).astimezone(timezone.utc)
+        if end_utc > cutoff:
+            raise ValueError("alpaca_end_within_15_minute_delay_window")
+        adjusted.update({"start": start_utc.isoformat().replace("+00:00", "Z"),
+                         "end": end_utc.isoformat().replace("+00:00", "Z"), "asof": "-"})
+        return request_get(url, params=adjusted, headers=headers, timeout=min(float(timeout), 30.0), **kwargs)
+
+    return request
 
 
 def _publish_catalogue(root: Path, symbol: str, path: Path, frame: pd.DataFrame, *, provider: str = PROVIDER, namespace: str = NAMESPACE) -> None:
@@ -130,12 +165,24 @@ def _publish_catalogue(root: Path, symbol: str, path: Path, frame: pd.DataFrame,
 
 
 def run_recovery(security_master: Path, data_root: Path, *, max_runtime_seconds: float = 64800, request_delay: float = 2.0,
-                 max_consecutive_failures: int = 3, downloader: Callable[[str, date, date], pd.DataFrame] = nasdaq_web_downloader,
+                 max_consecutive_failures: int = 3, downloader: Callable[[str, date, date], pd.DataFrame] | None = None,
+                 recovery_provider: str = "nasdaq", credential_file: Path | None = None,
                  now: datetime | None = None, sleep: Callable[[float], None] = time.sleep, monotonic: Callable[[], float] = time.monotonic) -> dict[str, Any]:
     if max_runtime_seconds < 0 or request_delay < 0 or max_consecutive_failures < 1: raise ValueError("invalid_limits")
-    now = now or datetime.now(timezone.utc); target = _target_end(now)
-    manifest = data_root / "manifests" / NAMESPACE; records = manifest / "records.jsonl"; manifest.mkdir(parents=True, exist_ok=True)
-    summary: dict[str, Any] = {"namespace": NAMESPACE, "source": SOURCE, "status": "running", "requested": 0, "attempted": 0, "success": 0, "failed": 0, "deferred": 0, "circuit_open": False, "target_end": target.isoformat()}
+    now = now or datetime.now(timezone.utc)
+    if recovery_provider not in {"nasdaq", "alpaca"}: raise ValueError("invalid_recovery_provider")
+    is_alpaca = recovery_provider == "alpaca"
+    if downloader is None:
+        # SIP is explicit.  request_retries=0 guarantees this scheduler never
+        # changes proxy, backs off, or silently switches to IEX after an error.
+        downloader = make_alpaca_downloader(feed="sip", credential_file=credential_file, request_retries=0,
+                                             request_get=_alpaca_sip_request_wrapper(now)) if is_alpaca else nasdaq_web_downloader
+    base_provider, base_namespace, base_source, base_adjustment = (
+        ("alpaca", ALPACA_NAMESPACE, ALPACA_SOURCE, "raw") if is_alpaca else (PROVIDER, NAMESPACE, SOURCE, "unadjusted")
+    )
+    target = _target_end(now)
+    manifest = data_root / "manifests" / base_namespace; records = manifest / "records.jsonl"; manifest.mkdir(parents=True, exist_ok=True)
+    summary: dict[str, Any] = {"namespace": base_namespace, "source": base_source, "recovery_provider": recovery_provider, "status": "running", "requested": 0, "attempted": 0, "success": 0, "failed": 0, "deferred": 0, "circuit_open": False, "target_end": target.isoformat()}
     with (manifest / "sync.lock").open("a+") as lock:
       try: fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
       except BlockingIOError: return {**summary, "status": "skipped", "reason": "lock_held"}
@@ -167,11 +214,15 @@ def run_recovery(security_master: Path, data_root: Path, *, max_runtime_seconds:
             summary["deferred"] += len(queue) - i; break
         start = max(START_FLOOR, date.fromisoformat(str(failure["requested_start"])))
         end = min(target, date.fromisoformat(str(failure.get("requested_end") or target)))
-        marker = str(failure.get("attempted_at", "")); record = {"symbol": symbol, "namespace": NAMESPACE, "provider": PROVIDER, "source": SOURCE, "attempted_at": datetime.now(timezone.utc).isoformat(), "source_attempted_at": marker, "requested_start": start.isoformat(), "requested_end": end.isoformat()}
+        marker = str(failure.get("attempted_at", "")); record = {"symbol": symbol, "namespace": base_namespace, "provider": base_provider, "source": base_source, "attempted_at": datetime.now(timezone.utc).isoformat(), "source_attempted_at": marker, "requested_start": start.isoformat(), "requested_end": end.isoformat()}
+        if is_alpaca:
+          # Explicitly record the endpoint's latest-data view.  This is not a
+          # corporate-action as-of reconstruction and no symbol aliasing occurs.
+          record["asof"] = "-"
         summary["attempted"] += 1
         try:
-          alias = VERIFIED_YAHOO_ALIASES.get(symbol) if downloader is nasdaq_web_downloader else None
-          provider, namespace, source, adjustment = ("yfinance", ALIAS_NAMESPACE, "yfinance", "raw_ohlc_with_adjusted_close_and_actions") if alias else (PROVIDER, NAMESPACE, SOURCE, "unadjusted")
+          alias = VERIFIED_YAHOO_ALIASES.get(symbol) if not is_alpaca and downloader is nasdaq_web_downloader else None
+          provider, namespace, source, adjustment = ("yfinance", ALIAS_NAMESPACE, "yfinance", "raw_ohlc_with_adjusted_close_and_actions") if alias else (base_provider, base_namespace, base_source, base_adjustment)
           record.update({"provider": provider, "namespace": namespace, "source": source, "provider_symbol": alias or symbol})
           raw = yahoo_daily_history_downloader(alias, start, end) if alias else downloader(symbol, start, end)
           if not isinstance(raw, pd.DataFrame) or raw.empty: raise ValueError("invalid_response")
@@ -197,7 +248,7 @@ def run_recovery(security_master: Path, data_root: Path, *, max_runtime_seconds:
           record.update({"status": "unavailable", "error_code": "symbol_unavailable"}); summary["failed"] += 1
         except Exception as exc:
           code = _error_code(exc); record.update({"status": "failed", "error_type": type(exc).__name__, "error_code": code}); summary["failed"] += 1
-          if code in {"http_429", "http_401", "http_403"}: consecutive = max_consecutive_failures
+          if code in {"http_429", "http_401", "http_403", "provider_authorization_failed"}: consecutive = max_consecutive_failures
           else: consecutive += 1
         _append(records, record); progress()
         if consecutive >= max_consecutive_failures:
@@ -208,9 +259,11 @@ def run_recovery(security_master: Path, data_root: Path, *, max_runtime_seconds:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Recover latest failed Yahoo windows from Nasdaq public web data")
+    parser = argparse.ArgumentParser(description="Recover Yahoo failures with isolated Nasdaq or historical Alpaca SIP data")
     parser.add_argument("--security-master", required=True, type=Path); parser.add_argument("--data-root", required=True, type=Path)
     parser.add_argument("--max-runtime-seconds", type=float, default=64800); parser.add_argument("--request-delay", type=float, default=2.0); parser.add_argument("--max-consecutive-failures", type=int, default=3)
+    parser.add_argument("--recovery-provider", choices=("nasdaq", "alpaca"), default="nasdaq")
+    parser.add_argument("--credential-file", type=Path)
     args = parser.parse_args(argv)
     try: result = run_recovery(**vars(args))
     except (OSError, ValueError): print(json.dumps({"status":"failed", "error_code":"recovery_configuration_or_io_failed"})); return 1
