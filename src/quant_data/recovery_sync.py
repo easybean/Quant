@@ -36,6 +36,14 @@ VERIFIED_YAHOO_ALIASES = {"AAC-U": "AAC-UN", "AAC.U": "AAC-UN", "ABR$D": "ABR-PD
 ALIAS_NAMESPACE = "yahoo-symbol-recovery-v1"
 ALPACA_NAMESPACE = "alpaca-sip-recovery-v1"
 ALPACA_SOURCE = "alpaca_stock_historical_v2"
+
+
+class SymbolHistoryUnknown(RuntimeError):
+    """A healthy HTTP response has no usable history for this symbol/window."""
+
+
+class SymbolRequestRejected(RuntimeError):
+    """Provider rejects this symbol query; this does not establish delisting."""
 _NY = ZoneInfo("America/New_York")
 
 
@@ -140,7 +148,14 @@ def _alpaca_sip_request_wrapper(now: datetime, request_get: Callable[..., Any] =
             raise ValueError("alpaca_end_within_15_minute_delay_window")
         adjusted.update({"start": start_utc.isoformat().replace("+00:00", "Z"),
                          "end": end_utc.isoformat().replace("+00:00", "Z"), "asof": "-"})
-        return request_get(url, params=adjusted, headers=headers, timeout=min(float(timeout), 30.0), **kwargs)
+        response = request_get(url, params=adjusted, headers=headers, timeout=min(float(timeout), 30.0), **kwargs)
+        if getattr(response, "status_code", None) in {400, 422}:
+            raise SymbolRequestRejected("symbol_request_rejected")
+        if getattr(response, "status_code", None) == 200:
+            payload = response.json()
+            if isinstance(payload, dict) and "bars" in payload and payload["bars"] in (None, []):
+                raise SymbolHistoryUnknown("empty_history_unknown")
+        return response
 
     return request
 
@@ -244,6 +259,10 @@ def run_recovery(security_master: Path, data_root: Path, *, max_runtime_seconds:
           merged = normalized if existing is None else pd.concat([existing, normalized], ignore_index=True).drop_duplicates("date", keep="last").sort_values("date", ignore_index=True)
           _atomic_parquet(merged, destination); _publish_catalogue(data_root, symbol, destination, merged, provider=provider, namespace=namespace)
           record["status"] = "success"; summary["success"] += 1; consecutive = 0
+        except (SymbolHistoryUnknown, SymbolRequestRejected) as exc:
+          record.update({"status": "failed", "error_code": str(exc), "http_response_received": True})
+          summary["failed"] += 1
+          consecutive = 0  # Healthy provider response, but no eligible data.
         except PermanentDownloadError:
           record.update({"status": "unavailable", "error_code": "symbol_unavailable"}); summary["failed"] += 1
         except Exception as exc:

@@ -139,3 +139,26 @@ def test_alpaca_sip_wrapper_rejects_recent_end_before_network_call():
     else:
         raise AssertionError("recent Alpaca end must be rejected")
     assert not called
+
+
+def test_symbol_specific_unknowns_do_not_stop_full_alpaca_queue(tmp_path):
+    from quant_data.recovery_sync import SymbolHistoryUnknown, SymbolRequestRejected
+    symbols = ["AAA", "BBB", "CCC", "DDD"]
+    master, root = _setup(tmp_path, [_failure(s) for s in symbols], {"symbol": symbols, "status": ["active"] * 4, "asset_type": ["Stock"] * 4})
+    def download(symbol, *_):
+        if symbol == "DDD": return _bars()
+        raise SymbolHistoryUnknown("empty_history_unknown") if symbol != "CCC" else SymbolRequestRejected("symbol_request_rejected")
+    result = run_recovery(master, root, now=NOW, recovery_provider="alpaca", downloader=download, request_delay=0)
+    assert result["attempted"] == 4 and result["success"] == 1 and not result["circuit_open"]
+
+
+def test_wrapper_classifies_only_explicit_empty_or_rejected_responses():
+    from quant_data.recovery_sync import SymbolHistoryUnknown, SymbolRequestRejected
+    import pytest
+    class Response:
+        def __init__(self, status): self.status_code = status
+        def json(self): return {"bars": None}
+    for status, exception in [(200, SymbolHistoryUnknown), (422, SymbolRequestRejected)]:
+        request = _alpaca_sip_request_wrapper(NOW, lambda *a, **k: Response(status))
+        with pytest.raises(exception):
+            request("url", params={"start": "2024-01-02", "end": "2024-01-09"}, headers={}, timeout=30)
