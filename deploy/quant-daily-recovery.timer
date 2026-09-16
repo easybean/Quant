@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Quant daily recovery queue hourly
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=5m
+AccuracySec=1m
+Persistent=true
+Unit=quant-daily-recovery.service
+
+[Install]
+WantedBy=timers.target

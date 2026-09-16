@@ -105,6 +105,7 @@ def test_yahoo_refresh_refuses_to_overwrite_invalid_catalogue(tmp_path):
 
 def test_canonical_view_stitches_only_yahoo_tail_and_keeps_overlap_base(tmp_path):
     root = _root(tmp_path)
+    assert search_us_daily_series("ABR$D", data_root=root)["items"] == []
     legacy = root / "bars/daily/symbol=TSLA-0f3c1e2d/bars.parquet"
     legacy.parent.mkdir(parents=True)
     pd.DataFrame({
@@ -134,6 +135,18 @@ def test_canonical_view_stitches_only_yahoo_tail_and_keeps_overlap_base(tmp_path
     assert result["bars"][1]["close"] == 2
     assert [bar["source"] for bar in result["bars"]] == ["nasdaq_web_unadjusted", "nasdaq_web_unadjusted", "yfinance", "yfinance"]
     assert result["source_segments"][0]["end"] == "2026-08-31"
+    recovery = root / "bars/daily/provider=nasdaq/namespace=nasdaq-daily-recovery-v1/symbol=TSLA-0f3c1e2d/bars.parquet"
+    recovery.parent.mkdir(parents=True)
+    frame = pd.read_parquet(yahoo).iloc[1:].copy()
+    frame["date"] = ["2026-09-02", "2026-09-03"]
+    frame["close"] = [88, 5]
+    frame["source"] = "nasdaq_web_unadjusted"
+    frame.to_parquet(recovery, index=False)
+    payload["series"].append({"series_id": "nasdaq:nasdaq-daily-recovery-v1:TSLA-0f3c1e2d", "symbol": "TSLA", "provider": "nasdaq", "namespace": "nasdaq-daily-recovery-v1", "raw_relative_path": str(recovery.relative_to(root / "bars/daily")), "first_date": "2026-09-02", "last_date": "2026-09-03", "rows": 2})
+    catalogue.write_text(json.dumps(payload))
+    result = read_us_daily_bars(items[0]["series_id"], "2026-08-30", "2026-09-03", data_root=root)
+    assert [bar["close"] for bar in result["bars"]] == [1, 2, 3, 4, 5]
+    assert result["bars"][-1]["source"] == "nasdaq_web_unadjusted"
 
 
 def test_legacy_series_id_remains_readable_and_member_cap_is_fail_closed(tmp_path):

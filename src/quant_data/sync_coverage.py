@@ -20,11 +20,18 @@ def build_sync_coverage(data_root: Path, security_master: Path) -> dict[str, obj
     active = set(eligible.loc[eligible.status.fillna("").str.casefold().eq("active"), "symbol"].dropna().str.strip().str.upper())
     historical = set(eligible.symbol.dropna().str.strip().str.upper()) - active
     starts = _earliest_successful_request_starts(manifest / "records.jsonl")
+    recovery_starts = _earliest_successful_request_starts(data_root / "manifests/nasdaq-daily-recovery-v1/records.jsonl")
+    for symbol, start in recovery_starts.items():
+        starts[symbol] = min(starts.get(symbol, start), start)
     catalogue = json.loads((data_root / "catalogue/us-daily-browser-v1.json").read_text())
     if catalogue.get("schema_version") != "us-daily-browser-v1" or not isinstance(catalogue.get("series"), list):
         raise ValueError("browser_catalogue_invalid")
-    acquired = {entry["symbol"]: entry["last_date"] for entry in catalogue["series"]
-                if entry.get("provider") == "yfinance" and entry.get("namespace") == "yahoo-daily-v1"}
+    acquired = {}
+    for entry in catalogue["series"]:
+        if (entry.get("provider"), entry.get("namespace")) in {
+            ("yfinance", "yahoo-daily-v1"), ("nasdaq", "nasdaq-daily-recovery-v1"), ("yfinance", "yahoo-symbol-recovery-v1")
+        }:
+            acquired[entry["symbol"]] = max(acquired.get(entry["symbol"], ""), entry["last_date"])
     target = _target_end(datetime.now(timezone.utc))
     rows = []
     for symbol in sorted(active):
@@ -36,7 +43,7 @@ def build_sync_coverage(data_root: Path, security_master: Path) -> dict[str, obj
                 current = pd.Timestamp(acquired[symbol]).date().isoformat()
                 latest = max(latest or "", current)
             except (OSError, ValueError, KeyError, ImportError):
-                error = "invalid_yahoo_catalogue_date"
+                error = "invalid_acquisition_catalogue_date"
         bridge_needed = bool(previous and previous < target.isoformat() and starts.get(symbol, target + timedelta(days=1)).isoformat() > (pd.Timestamp(previous).date() + timedelta(days=1)).isoformat())
         status = "needs_update" if not latest or latest < target.isoformat() or bridge_needed or error else "endpoint_current"
         rows.append({"symbol": symbol, "baseline_last_date": previous, "latest_date": latest,

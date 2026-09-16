@@ -21,10 +21,12 @@ PYTHONPATH=src .venv/bin/python -m quant_data.research_snapshot /path/to/snapsho
 ```bash
 PYTHONPATH=src .venv/bin/python -m quant_data.daily_sync \
   --security-master data/metadata/security_master.parquet \
-  --data-root data --start 2016-01-01 --max-backfill-symbols 100
+  --data-root data --start 2016-01-01
 ```
 
 服务器使用 `deploy/quant-yahoo-daily.service` 与 `.timer` 的用户级定时器，每日北京时间 11:30 后执行。查看 `data/manifests/yahoo-daily-v1/latest.json` 与服务日志确认真实下载结果；定时器活跃不代表 Yahoo 请求成功或研究数据合格。
+
+Yahoo 失败缺口由独立 Nasdaq 补数队列处理：`python -m quant_data.recovery_sync --security-master data/metadata/security_master.parquet --data-root data`。服务器 `quant-daily-recovery.timer` 每小时检查新失败窗；相同失败不热重试。补数严格校验 OHLCV、保留独立来源，缺失成交量不填零，公司行为未知；浏览拼接不解除回测门禁。状态在 `data/manifests/nasdaq-daily-recovery-v1/latest.json`。
 
 目标是下载 2016 年至今的美股日 K，并把当前上市与已退市证券都纳入证券清单。行情来自 yfinance；证券清单可从 Alpha Vantage `LISTING_STATUS` 下载，也可导入已经下载好的 CSV。
 

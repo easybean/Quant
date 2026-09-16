@@ -28,7 +28,7 @@ MAX_RETURNED_ROWS = 300
 # A display composite is deliberately small and bounded.  It is not a general
 # purpose cross-provider reconciliation mechanism.
 MAX_COMPOSITE_MEMBERS = 8
-_QUERY = re.compile(r"[A-Z0-9._-]{1,32}")
+_QUERY = re.compile(r"[A-Z0-9.$_-]{1,32}")
 _SERIES = re.compile(r"[A-Za-z0-9._:-]{3,180}")
 _RAW_FILE = re.compile(r"(?:provider=[A-Za-z0-9._-]+/)?(?:namespace=[A-Za-z0-9._-]+/)?symbol=[A-Za-z0-9._-]+/bars\.parquet")
 _PUBLIC_COLUMNS = ("date", "open", "high", "low", "close", "volume", "source", "adjustment_status")
@@ -191,7 +191,7 @@ def refresh_yahoo_browser_catalogue(data_root: str | Path) -> dict[str, object]:
 def search_us_daily_series(query: str, limit: int = 10, *, data_root: str | Path | None = None) -> dict[str, object]:
     normalized = query.strip().upper()
     if not _QUERY.fullmatch(normalized):
-        raise DailyQuoteInputError("query must be 1-32 uppercase letters, numbers, dot, dash, or underscore")
+        raise DailyQuoteInputError("query must be 1-32 uppercase letters, numbers, dot, dollar sign, dash, or underscore")
     if not isinstance(limit, int) or not 1 <= limit <= MAX_SEARCH_RESULTS:
         raise DailyQuoteInputError(f"limit must be between 1 and {MAX_SEARCH_RESULTS}")
     entries = _load_catalogue(_data_root(data_root))
@@ -218,6 +218,10 @@ def _is_yahoo(entry: dict[str, Any]) -> bool:
     return entry.get("provider") == "yfinance" and entry.get("namespace") == "yahoo-daily-v1"
 
 
+def _is_append_source(entry: dict[str, Any]) -> bool:
+    return _is_yahoo(entry) or (entry.get("provider"), entry.get("namespace")) in {("nasdaq", "nasdaq-daily-recovery-v1"), ("yfinance", "yahoo-symbol-recovery-v1")}
+
+
 def _as_date(value: object) -> date | None:
     try:
         return date.fromisoformat(str(value))
@@ -238,7 +242,7 @@ def _canonical_catalogue(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
         base_first, base_last = _as_date(base.get("first_date")), _as_date(base.get("last_date"))
         # These fields must describe the files the reader can actually use:
         # an unrelated second non-Yahoo feed is intentionally not stitched.
-        yahoo_tail = [member for member in members if _is_yahoo(member) and member is not base
+        yahoo_tail = [member for member in members if _is_append_source(member) and member is not base
                       and base_last is not None and (_as_date(member.get("last_date")) or date.min) > base_last]
         usable_lasts = [base_last] + [_as_date(member.get("last_date")) for member in yahoo_tail]
         composites.append({
@@ -332,7 +336,7 @@ def _response(selected: dict[str, Any], bars: list[dict[str, object]], start_dat
         "bars": bars,
     }
     if composite:
-        response["limitations"] = ["仅用于行情浏览；跨来源复权口径与总回报未经验证，不得用于回测或正式研究快照。", "基准历史优先保留；Yahoo 仅追加基准最后日期之后的日期。", "公司行为、退市与 PIT 适用性均未验证。"]
+        response["limitations"] = ["仅用于行情浏览；跨来源复权口径与总回报未经验证，不得用于回测或正式研究快照。", "基准历史优先保留；补数仅追加基准最后日期之后，补数重叠时优先保留 Yahoo。", "公司行为、退市与 PIT 适用性均未验证。"]
         response["source_segments"] = _source_segments(bars)
     return response
 
@@ -348,7 +352,7 @@ def _base_priority(entry: dict[str, Any]) -> tuple[int, int, str, str]:
     legacy = entry.get("provider") == "unknown" and str(entry.get("raw_relative_path", "")).startswith("symbol=")
     start, end = _as_date(entry.get("first_date")), _as_date(entry.get("last_date"))
     span = (end - start).days if start and end else -1
-    return (0 if legacy else 1 if not _is_yahoo(entry) else 2, -span, str(entry["series_id"]), str(entry["raw_relative_path"]))
+    return (0 if legacy else 1 if not _is_append_source(entry) else 2, -span, str(entry["series_id"]), str(entry["raw_relative_path"]))
 
 
 def _read_composite(selected: dict[str, Any], members: list[dict[str, Any]], start_date: date, end_date: date, root: Path) -> dict[str, object]:
@@ -358,7 +362,7 @@ def _read_composite(selected: dict[str, Any], members: list[dict[str, Any]], sta
     # chunked UI requests must choose the same source at the boundary.
     base_last = base_frame["date"].max()
     merged = base_frame.copy()
-    for member in sorted((item for item in members if _is_yahoo(item) and item is not base), key=lambda item: str(item["series_id"])):
+    for member in sorted((item for item in members if _is_append_source(item) and item is not base), key=lambda item: (not _is_yahoo(item), str(item["series_id"]))):
         yahoo = _read_frame(member, root)
         merged = pd.concat([merged, yahoo.loc[yahoo["date"] > base_last]], ignore_index=True)
     # A base always wins an overlap.  Yahoo rows were appended only after its

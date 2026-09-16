@@ -23,3 +23,11 @@ def test_historical_only_is_excluded_and_bridge_gap_is_not_current(tmp_path, mon
     assert result["historical_only_symbols"] == 1 and result["needs_update"] == 1
     (manifest / "records.jsonl").write_text(json.dumps({"symbol": "TSLA", "status": "success", "requested_start": "2026-09-01"}) + "\n")
     assert build_sync_coverage(tmp_path, master)["endpoint_current"] == 1
+    (manifest / "records.jsonl").unlink()
+    recovery = tmp_path / "manifests/nasdaq-daily-recovery-v1"
+    recovery.mkdir(parents=True)
+    (recovery / "records.jsonl").write_text(json.dumps({"symbol": "TSLA", "status": "success", "requested_start": "2026-09-01"}) + "\n")
+    catalogue.write_text(json.dumps({"schema_version": "us-daily-browser-v1", "series": [
+        {"symbol": "TSLA", "provider": "nasdaq", "namespace": "nasdaq-daily-recovery-v1", "last_date": "2026-09-15"},
+        {"symbol": "TSLA", "provider": "yfinance", "namespace": "yahoo-daily-v1", "last_date": "2026-09-10"}]}))
+    assert build_sync_coverage(tmp_path, master)["endpoint_current"] == 1
