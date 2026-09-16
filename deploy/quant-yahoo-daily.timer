@@ -1,0 +1,12 @@
+[Unit]
+Description=Quant Yahoo daily sync at 11:30 Asia/Shanghai
+
+[Timer]
+OnCalendar=*-*-* 11:30:00 Asia/Shanghai
+RandomizedDelaySec=5m
+AccuracySec=1m
+Persistent=true
+Unit=quant-yahoo-daily.service
+
+[Install]
+WantedBy=timers.target

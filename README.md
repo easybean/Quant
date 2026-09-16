@@ -14,6 +14,18 @@ PYTHONPATH=src .venv/bin/python -m quant_data.research_snapshot /path/to/snapsho
 
 ## 第一阶段数据管道
 
+### Yahoo 每日更新
+
+专用更新程序与原有批量下载隔离，详见 [P1-10](docs/tasks/P1-10.md)。历史补数分批，已有序列回查最近七天；原始响应批次保留，不修改固定研究快照。
+
+```bash
+PYTHONPATH=src .venv/bin/python -m quant_data.daily_sync \
+  --security-master data/metadata/security_master.parquet \
+  --data-root data --start 2016-01-01 --max-backfill-symbols 100
+```
+
+服务器使用 `deploy/quant-yahoo-daily.service` 与 `.timer` 的用户级定时器，每日北京时间 11:30 后执行。查看 `data/manifests/yahoo-daily-v1/latest.json` 与服务日志确认真实下载结果；定时器活跃不代表 Yahoo 请求成功或研究数据合格。
+
 目标是下载 2016 年至今的美股日 K，并把当前上市与已退市证券都纳入证券清单。行情来自 yfinance；证券清单可从 Alpha Vantage `LISTING_STATUS` 下载，也可导入已经下载好的 CSV。
 
 需要特别说明：退市证券的最后一根日 K 不一定代表投资者最终收到的退市收益。管道会保存缺失和失败信息，但暂时不会猜测现金收购、换股、破产或转 OTC 的最终价值；这部分需要后续的退市事件数据补全。
