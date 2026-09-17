@@ -24,6 +24,40 @@ def test_completed_session_holiday_weekend_and_dst():
     assert completed_session(datetime(2026, 3, 9, 12, tzinfo=timezone.utc)).isoformat() == "2026-03-06"
 
 
+def test_historical_review_obligations_do_not_break_current_provider_queues(tmp_path, monkeypatch):
+    from quant_data import sync_scheduler as module
+    current = {"symbol": "AAA", "task_id": "current", "requested_start": "2026-09-01", "requested_end": "2026-09-16", "reason": "endpoint_or_bridge_gap"}
+    review = {"symbol": "OLD", "task_id": "review", "requested_start": "2016-01-01", "requested_end": "2026-08-16", "reason": "mapping_window_remaining_history_unverified"}
+    plan = {"tasks": [current, review], "target_date": "2026-09-16", "pending": 2, "endpoint_or_bridge_pending": 1, "historical_candidate_tasks": 0}
+    monkeypatch.setattr(module, "refresh_yahoo_browser_catalogue", lambda root: None)
+    monkeypatch.setattr(module, "build_gap_plan", lambda *args, **kwargs: plan)
+    monkeypatch.setattr(module, "due_tasks", lambda plan, *args: plan["tasks"])
+    calls = []
+    def run(master, root, *, gap_queue, **kwargs):
+        tasks = json.loads(gap_queue.read_text())["tasks"]
+        assert tasks == [current]
+        calls.append(gap_queue.name)
+        return {"status": "success", "success": 1, "failed": 0, "attempted": 1}
+    monkeypatch.setattr(module, "run_recovery", run)
+    monkeypatch.setattr(module, "run_sync", run)
+    result = module.run_cycle(tmp_path, tmp_path / "master", tmp_path / "credentials")
+    assert len(calls) == 3 and result["pending_after"] == 2
+
+
+def test_multiple_mapping_versions_keep_one_review_task_per_symbol(tmp_path):
+    from quant_data.symbol_mapping import MAPPING_NAMESPACE
+    master = setup(tmp_path, ("SUPX",))
+    (tmp_path / "manifests/yahoo-daily-v1/baselines.json").write_text(json.dumps({"symbols": {"SUPX": {"last_date": "2026-09-16"}}}))
+    catalogue = tmp_path / "catalogue/us-daily-browser-v1.json"
+    data = json.loads(catalogue.read_text());data["series"][0]["last_date"] = "2026-09-16";catalogue.write_text(json.dumps(data))
+    folder = tmp_path / "manifests" / MAPPING_NAMESPACE;folder.mkdir()
+    item = {"symbol": "SUPX", "requested_start": "2016-01-01", "requested_end": "2026-08-16", "status": "unverified", "research_qualified": False}
+    (folder / "remaining-history.json").write_text(json.dumps({"schema_version": "symbol-mapping-remaining-history-v1", "items": [{**item, "original_task_id": "first"}, {**item, "original_task_id": "second"}]}))
+    plan = build_gap_plan(tmp_path, master, now=NOW, audit_limit=0)
+    assert len(plan["tasks"]) == 1
+    assert plan["tasks"][0]["remaining_history_unverified"] is True
+
+
 def setup(root, symbols=("SUPX", "COLD", "ATEST", "OLD")):
     master = root / "master.parquet"
     pd.DataFrame({"symbol": symbols, "status": ["delisted" if s == "OLD" else "active" for s in symbols],
