@@ -1,0 +1,10 @@
+[Unit]
+Description=Refresh automatic security archives from local master daily
+
+[Timer]
+OnCalendar=*-*-* 07:15:00
+Persistent=true
+Unit=quant-security-catalogue.service
+
+[Install]
+WantedBy=timers.target

@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 import os
 from urllib.parse import urlsplit
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Query
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -28,6 +28,7 @@ from .universe_drafts import AssetPoolDraftStore, InstrumentDraftStore, Universe
 from .risk_policy_drafts import RiskPolicyDraftInputError, RiskPolicyDraftStore
 from .paper_ledger import PaperLedgerInputError, PaperLedgerStore
 from .data_source_drafts import DataSourceDraftInputError, DataSourceDraftStore
+from .security_catalog import SecurityCatalogueStore
 
 _DEFAULT_ORIGINS = ("http://127.0.0.1:5173", "http://192.168.1.132:8510")
 _SCHEMA_VERSION = "v1"
@@ -149,6 +150,9 @@ def create_app() -> FastAPI:
     data_source_store = DataSourceDraftStore(state_root)
     data_source_store.initialize()
     app.state.data_source_draft_store = data_source_store
+    security_catalogue_store = SecurityCatalogueStore(state_root)
+    security_catalogue_store.initialize()
+    app.state.security_catalogue_store = security_catalogue_store
 
     @app.on_event("startup")
     def start_jobs() -> None:
@@ -180,6 +184,10 @@ def create_app() -> FastAPI:
     @app.get("/api/v1/strategy-templates")
     def strategy_templates() -> dict[str, object]:
         return {"schema_version": _SCHEMA_VERSION, "items": template_catalogue()}
+
+    @app.get("/api/v1/security-catalogue")
+    def security_catalogue(query: str = Query(default="", max_length=120), limit: int = Query(default=50, ge=1, le=100), offset: int = Query(default=0, ge=0)) -> dict[str, object]:
+        return security_catalogue_store.list(query=query, limit=limit, offset=offset)
 
     @app.get("/api/v1/strategy-drafts")
     def strategy_drafts(limit: int = 50) -> dict[str, object]:

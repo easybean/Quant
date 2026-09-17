@@ -9,7 +9,7 @@ import { TaskOverview } from './components/TaskOverview'
 import { BacktestWizard } from './components/BacktestWizard'
 import { StrategyWorkspace } from './components/StrategyWorkspace'
 import { VisualStrategyWorkspace } from './components/VisualStrategyWorkspace'
-import { InstrumentWorkspace } from './components/UniverseWorkspace'
+import { SecurityCatalogueWorkspace } from './components/SecurityCatalogueWorkspace'
 import { AssetPoolWorkspace } from './components/AssetPoolWorkspace'
 import { RiskPolicyWorkspace } from './components/RiskPolicyWorkspace'
 import { DataSourceWorkspace } from './components/DataSourceWorkspace'
@@ -41,7 +41,7 @@ export default function App() {
   else if (activeId === 'new-backtest') content = <BacktestWizard />
   else if (activeId === 'strategy-templates') content = <StrategyWorkspace />
   else if (activeId === 'my-strategies' || activeId === 'strategy-details') content = <VisualStrategyWorkspace onNavigate={navigate} />
-  else if (activeId === 'instruments') content = <InstrumentWorkspace />
+  else if (activeId === 'instruments') content = <SecurityCatalogueWorkspace />
   else if (activeId === 'datasets') content = <AssetPoolWorkspace onNavigate={navigate} />
   else if (activeId === 'risk-rules') content = <RiskPolicyWorkspace />
   else if (activeId === 'connections') content = <DataSourceWorkspace />

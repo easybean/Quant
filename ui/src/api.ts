@@ -117,6 +117,16 @@ export const strategyTemplatesUrl = `${baseUrl}/api/v1/strategy-templates`
 export const strategyDraftsUrl = `${baseUrl}/api/v1/strategy-drafts`
 export const visualStrategyDraftsUrl = `${baseUrl}/api/v1/visual-strategy-drafts`
 export const instrumentDraftsUrl = `${baseUrl}/api/v1/instrument-drafts`
+export type SecurityRecord = { catalog_id: string; symbol: string; name: string | null; exchange: string | null; asset_type: string; status: string; ipo_date: string | null; delisting_date: string | null; source_as_of: string | null; identity_status: string; source?: string; research_qualified: false }
+export type SecurityCatalogue = { items: SecurityRecord[]; total: number; total_records: number; quarantined_records: number; research_qualified: false }
+export async function fetchSecurityCatalogue(query: string, signal: AbortSignal): Promise<SecurityCatalogue> {
+  const params = new URLSearchParams({ query, limit: '50' })
+  const response = await fetch(`${baseUrl}/api/v1/security-catalogue?${params}`, { signal, headers: { Accept: 'application/json' } })
+  if (!response.ok) throw new Error(`证券目录读取失败（${response.status}），请重试。`)
+  const payload: unknown = await response.json()
+  if (!payload || typeof payload !== 'object' || !Array.isArray((payload as SecurityCatalogue).items) || typeof (payload as SecurityCatalogue).total_records !== 'number') throw new Error('证券目录返回了无效数据，请重试。')
+  return payload as SecurityCatalogue
+}
 export const assetPoolDraftsUrl = `${baseUrl}/api/v1/asset-pool-drafts`
 export const riskPolicyDraftsUrl = `${baseUrl}/api/v1/risk-policy-drafts`
 export const paperAccountsUrl = `${baseUrl}/api/v1/paper-accounts`

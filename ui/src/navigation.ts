@@ -38,7 +38,7 @@ export const navigation: NavGroup[] = [
     id: 'market-data', label: '市场与数据', icon: Database,
     children: [
       { id: 'market-browser', label: '行情浏览', description: '自选、搜索、K线、成交量和合约信息。', capabilities: ['行情检索', 'K线', '合约信息'] },
-      { id: 'instruments', label: '资产与合约', description: '单个证券、交易对和期货合约的版本化定义。', capabilities: ['标的定义', '合约规则', '版本历史'] },
+      { id: 'instruments', label: '资产与合约', description: '系统自动建立的美股证券档案；手工定义仅用于维护。', capabilities: ['自动证券档案', '来源与生命周期', '待核验状态'] },
       { id: 'data-catalog', label: '数据目录', description: '覆盖范围、频率、来源、质量和数据版本。', capabilities: ['覆盖分析', '数据质量', '版本追踪'] },
       { id: 'corporate-actions', label: '股票事件', description: '拆分、分红、退市和历史股票池。', capabilities: ['公司行为', '退市标识', '历史成分'] },
       { id: 'index-constituents', label: '指数成分', description: '当前/历史名单、变动时间线和名单对比。', capabilities: ['历史名单', '变动对比', '时间线'] },
