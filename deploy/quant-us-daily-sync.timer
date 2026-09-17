@@ -1,0 +1,11 @@
+[Unit]
+Description=Server-only US daily gap resume (no model usage)
+
+[Timer]
+OnBootSec=3min
+OnUnitInactiveSec=5min
+AccuracySec=30s
+Unit=quant-us-daily-sync.service
+
+[Install]
+WantedBy=timers.target

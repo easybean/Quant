@@ -16,6 +16,14 @@ PYTHONPATH=src .venv/bin/python -m quant_data.research_snapshot /path/to/snapsho
 
 ### Yahoo 每日更新
 
+推荐服务器入口已改为统一缺口调度器（部署状态见 P1-10）：安装可选依赖 `pip install '.[data-sync]'`，执行 `python -m quant_data.sync_scheduler --security-master data/metadata/security_master.parquet --data-root data --credential-file /服务器安全凭证路径`。`quant-us-daily-sync.timer` 在每轮结束五分钟后续跑，不调用模型；使用 XNYS 日历及保守发布截止，优先历史 SIP，再由 Yahoo/Nasdaq 处理剩余缺口。每次运行有预算而非证券总量上限。
+
+SIP相同窗口按最多50个证券批量读取，完整分页后才发布，实际请求限速且不隐藏重试/降级；批次大小不限制全量范围。最新末日/桥接缺口优先于历史日期缺失候选，两类分别统计；日期缺失不自动意味着供应商漏数或可交易。
+
+持久计划/状态位于 `data/manifests/us-daily-sync/{queue,latest,session-audit}.json`；供应商 append-only records 保留每次窗口的成功/失败。统一入口排除有证据的交易所测试证券及任一来源明确测试标记，保留原始主表，不按名称猜测。未尝试标的也进入备源；窗口最多三次尝试、指数冷却，鉴权/限流/网络错误暂停对应供应商，不静默放宽 OHLCV。日更继续七日回查；中间缺失交易日采用轮转审计，缺失仍可能是停牌/供应商缺口，不能宣称全市场无偏完整或研究合格。
+
+旧独立命令仍可手动诊断；统一调度启用时必须停用旧 Yahoo/Nasdaq/SIP 定时器，避免重复采集。离线浏览索引定时器保留，接口使用固定状态索引提示活跃证券同步滞后；历史退市证券不要求最新日线。
+
 专用更新程序与原有批量下载隔离，详见 [P1-10](docs/tasks/P1-10.md)。历史补数分批，已有序列回查最近七天；原始响应批次保留，不修改固定研究快照。
 
 ```bash

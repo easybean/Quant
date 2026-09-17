@@ -6,6 +6,7 @@ not a repair of Yahoo data nor a research-qualified total-return series.
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack
 import fcntl
 import hashlib
 import json
@@ -23,6 +24,7 @@ import requests
 from zoneinfo import ZoneInfo
 
 from .daily_sync import _target_end, _validate_normalized, yahoo_daily_history_downloader
+from .sync_eligibility import select_sync_symbols
 from .pipeline import FatalProviderError, PermanentDownloadError, make_alpaca_downloader, nasdaq_web_downloader, normalize_bars, symbol_key
 
 NAMESPACE = "nasdaq-daily-recovery-v1"
@@ -145,7 +147,13 @@ def _alpaca_sip_request_wrapper(now: datetime, request_get: Callable[..., Any] =
         start_utc = datetime.combine(start_day, daytime.min, tzinfo=_NY).astimezone(timezone.utc)
         end_utc = datetime.combine(end_day, daytime.min, tzinfo=_NY).astimezone(timezone.utc)
         if end_utc > cutoff:
-            raise ValueError("alpaca_end_within_15_minute_delay_window")
+            # The completed day's bar is timestamped at NY midnight. Before
+            # the *following* midnight, its exclusive day boundary is still
+            # in the future; use the legal delayed cutoff, but only when that
+            # entire requested day passed the conservative publication gate.
+            if end_day - pd.Timedelta(days=1) > _target_end(now_utc) or start_utc >= cutoff:
+                raise ValueError("alpaca_end_within_15_minute_delay_window")
+            end_utc = cutoff
         adjusted.update({"start": start_utc.isoformat().replace("+00:00", "Z"),
                          "end": end_utc.isoformat().replace("+00:00", "Z"), "asof": "-"})
         response = request_get(url, params=adjusted, headers=headers, timeout=min(float(timeout), 30.0), **kwargs)
@@ -182,9 +190,11 @@ def _publish_catalogue(root: Path, symbol: str, path: Path, frame: pd.DataFrame,
 def run_recovery(security_master: Path, data_root: Path, *, max_runtime_seconds: float = 64800, request_delay: float = 2.0,
                  max_consecutive_failures: int = 3, downloader: Callable[[str, date, date], pd.DataFrame] | None = None,
                  recovery_provider: str = "nasdaq", credential_file: Path | None = None,
-                 now: datetime | None = None, sleep: Callable[[float], None] = time.sleep, monotonic: Callable[[], float] = time.monotonic) -> dict[str, Any]:
+                 now: datetime | None = None, sleep: Callable[[float], None] = time.sleep, monotonic: Callable[[], float] = time.monotonic,
+                 gap_queue: Path | None = None) -> dict[str, Any]:
     if max_runtime_seconds < 0 or request_delay < 0 or max_consecutive_failures < 1: raise ValueError("invalid_limits")
     now = now or datetime.now(timezone.utc)
+    default_downloader = downloader is None
     if recovery_provider not in {"nasdaq", "alpaca"}: raise ValueError("invalid_recovery_provider")
     is_alpaca = recovery_provider == "alpaca"
     if downloader is None:
@@ -198,7 +208,7 @@ def run_recovery(security_master: Path, data_root: Path, *, max_runtime_seconds:
     target = _target_end(now)
     manifest = data_root / "manifests" / base_namespace; records = manifest / "records.jsonl"; manifest.mkdir(parents=True, exist_ok=True)
     summary: dict[str, Any] = {"namespace": base_namespace, "source": base_source, "recovery_provider": recovery_provider, "status": "running", "requested": 0, "attempted": 0, "success": 0, "failed": 0, "deferred": 0, "circuit_open": False, "target_end": target.isoformat()}
-    with (manifest / "sync.lock").open("a+") as lock:
+    with ExitStack() as resources, (manifest / "sync.lock").open("a+") as lock:
       try: fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
       except BlockingIOError: return {**summary, "status": "skipped", "reason": "lock_held"}
       def progress(): _atomic_json(manifest / "latest.json", summary)
@@ -214,15 +224,37 @@ def run_recovery(security_master: Path, data_root: Path, *, max_runtime_seconds:
       master = _read_master(security_master)
       required = {"symbol", "status", "asset_type"}
       if not required.issubset(master.columns): raise ValueError("security_master_missing_required_columns")
-      active = set(master.loc[master.status.astype(str).str.casefold().eq("active") & master.asset_type.astype(str).str.casefold().isin({"stock", "etf"}), "symbol"].astype(str).str.strip().str.upper())
+      active = set(select_sync_symbols(master))
       failures = _latest_yahoo_failures(data_root / "manifests" / YAHOO_NAMESPACE / "records.jsonl")
+      if gap_queue is not None:
+          plan = json.loads(gap_queue.read_text(encoding="utf-8"))
+          if plan.get("schema_version") != "us-daily-gap-queue-v1" or not isinstance(plan.get("tasks"), list):
+              raise ValueError("gap_queue_invalid")
+          failures = {}
+          for task in plan["tasks"]:
+              symbol = str(task["symbol"])
+              start_day = date.fromisoformat(str(task["requested_start"]))
+              end_day = date.fromisoformat(str(task["requested_end"]))
+              if start_day < START_FLOOR or start_day > end_day or end_day > target:
+                  raise ValueError("gap_queue_window_invalid")
+              if symbol in failures: raise ValueError("duplicate_gap_queue_symbol")
+              failures[symbol] = {**task, "attempted_at": str(task["task_id"])}
       attempts, markers, recovered_end = _recovery_state(records)
       def needs_recovery(symbol: str, row: dict[str, Any]) -> bool:
+          if gap_queue is not None:
+              return symbol in active  # Scheduler owns cooldown/attempt limits, including internal gaps.
           if symbol not in active or markers.get(symbol) == str(row.get("attempted_at", "")): return False
           try: return date.fromisoformat(str(row.get("requested_end") or target)) > recovered_end.get(symbol, date.min)
           except ValueError: return False
       queue = [(s, row) for s, row in failures.items() if needs_recovery(s, row)]
-      queue.sort(key=lambda item: (attempts.get(item[0], ""), item[0])); summary["requested"] = len(queue)
+      if gap_queue is None:
+          queue.sort(key=lambda item: (attempts.get(item[0], ""), item[0]))
+      summary["requested"] = len(queue)
+      if queue and gap_queue is not None and is_alpaca and default_downloader:
+          from .sip_batch import make_sip_batch_downloader
+          downloader = make_sip_batch_downloader([{**row, "symbol": symbol} for symbol, row in queue], credential_file, now)
+          resources.callback(downloader.close)
+          summary["acquisition_mode"] = "batch_sip"
       consecutive = 0
       for i, (symbol, failure) in enumerate(queue):
         if max_runtime_seconds and monotonic() - started >= max_runtime_seconds:
@@ -235,11 +267,13 @@ def run_recovery(security_master: Path, data_root: Path, *, max_runtime_seconds:
           # corporate-action as-of reconstruction and no symbol aliasing occurs.
           record["asof"] = "-"
         summary["attempted"] += 1
+        response_received = False
         try:
           alias = VERIFIED_YAHOO_ALIASES.get(symbol) if not is_alpaca and downloader is nasdaq_web_downloader else None
           provider, namespace, source, adjustment = ("yfinance", ALIAS_NAMESPACE, "yfinance", "raw_ohlc_with_adjusted_close_and_actions") if alias else (base_provider, base_namespace, base_source, base_adjustment)
           record.update({"provider": provider, "namespace": namespace, "source": source, "provider_symbol": alias or symbol})
           raw = yahoo_daily_history_downloader(alias, start, end) if alias else downloader(symbol, start, end)
+          response_received = isinstance(raw, pd.DataFrame)
           if not isinstance(raw, pd.DataFrame) or raw.empty: raise ValueError("invalid_response")
           archive = data_root / "reference" / namespace / uuid.uuid4().hex / f"{symbol_key(symbol)}.parquet"
           _atomic_parquet(raw, archive, index=True)
@@ -265,14 +299,20 @@ def run_recovery(security_master: Path, data_root: Path, *, max_runtime_seconds:
           consecutive = 0  # Healthy provider response, but no eligible data.
         except PermanentDownloadError:
           record.update({"status": "unavailable", "error_code": "symbol_unavailable"}); summary["failed"] += 1
+          consecutive = 0
         except Exception as exc:
           code = _error_code(exc); record.update({"status": "failed", "error_type": type(exc).__name__, "error_code": code}); summary["failed"] += 1
+          summary["last_error_code"] = code
           if code in {"http_429", "http_401", "http_403", "provider_authorization_failed"}: consecutive = max_consecutive_failures
+          elif response_received and isinstance(exc, ValueError): consecutive = 0
           else: consecutive += 1
         _append(records, record); progress()
         if consecutive >= max_consecutive_failures:
           summary["circuit_open"] = True; summary["deferred"] += len(queue)-i-1; break
         if i < len(queue)-1 and request_delay: sleep(request_delay)
+      if summary.get("acquisition_mode") == "batch_sip":
+          summary["batch_http_attempts"] = getattr(downloader, "batch_request_count", 0)
+          summary["single_fallback_http_attempts"] = getattr(downloader, "single_request_count", 0)
       summary["status"] = "failed" if summary["failed"] or summary["circuit_open"] else ("partial" if summary["deferred"] else "success")
       summary["finished_at"] = datetime.now(timezone.utc).isoformat(); progress(); return summary
 

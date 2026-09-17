@@ -24,6 +24,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from .pipeline import normalize_bars, symbol_key, yahoo_symbol
+from .sync_eligibility import select_sync_symbols
 
 NAMESPACE = "yahoo-daily-v1"
 PROVIDER = "yfinance"
@@ -70,8 +71,8 @@ def _is_yfinance_missing_metadata_or_prices(exc: Exception) -> bool:
     return bool(unavailable) and isinstance(exc, unavailable)
 
 
-def _raise_if_chart_confirms_symbol_unavailable(symbol: str) -> None:
-    """Perform one bounded Yahoo diagnostic, failing closed on every ambiguity.
+def _chart_history_classification(symbol: str) -> str:
+    """Classify one bounded chart diagnostic as empty, unavailable, or unknown.
 
     yfinance can wrap transport/JSON failures in missing-price or missing-timezone
     exceptions.  Only Yahoo's own chart error code, paired with a 404 or 200
@@ -89,17 +90,62 @@ def _raise_if_chart_confirms_symbol_unavailable(symbol: str) -> None:
             timeout=30,
         )
         if response.status_code not in (200, 404):
-            return False
+            return "unknown"
         payload = response.json()
-        error = ((payload.get("chart") or {}).get("error") or {}) if isinstance(payload, dict) else {}
+        chart = payload.get("chart") if isinstance(payload, dict) else None
+        error = (chart.get("error") or {}) if isinstance(chart, dict) else {}
         if isinstance(error, dict) and error.get("code") in {"Not Found", "NotFound"}:
-            raise ConfirmedSymbolUnavailable("yahoo_chart_not_found")
-    except ConfirmedSymbolUnavailable:
-        raise
+            return "unavailable"
+        # A successful chart payload with an explicit empty timestamp array is
+        # provider evidence of a valid request with no history.  A mere 200,
+        # malformed payload, or non-empty chart that yfinance could not parse
+        # remains unknown and must retain the provider circuit protection.
+        result = chart.get("result") if isinstance(chart, dict) else None
+        if response.status_code == 200 and isinstance(result, list) and len(result) == 1:
+            timestamps = result[0].get("timestamp") if isinstance(result[0], dict) else None
+            if isinstance(timestamps, list) and not timestamps:
+                return "healthy_empty"
+        return "unknown"
     except Exception:
         # Network, HTTP decoding, and JSON errors are all provider failures,
         # never evidence that a security master symbol is unavailable.
-        return False
+        return "unknown"
+
+
+def _raise_if_chart_confirms_symbol_unavailable(symbol: str) -> None:
+    """Backward-compatible unavailable-only diagnostic wrapper."""
+    if _chart_history_classification(symbol) == "unavailable":
+        raise ConfirmedSymbolUnavailable("yahoo_chart_not_found")
+
+
+def _load_gap_queue(path: Path, eligible: set[str], allowed_end: date) -> tuple[date, dict[str, dict[str, str]]]:
+    """Load a fixed scheduler plan; reject mutable/ambiguous gap requests."""
+    try:
+        plan = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(plan, dict) or plan.get("schema_version") != "us-daily-gap-queue-v1":
+            raise ValueError
+        target = date.fromisoformat(str(plan["target_date"]))
+        tasks = plan["tasks"]
+        if not isinstance(tasks, list) or target > allowed_end:
+            raise ValueError
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        raise ValueError("gap_queue_invalid") from exc
+    selected: dict[str, dict[str, str]] = {}
+    for task in tasks:
+        try:
+            if not isinstance(task, dict):
+                raise ValueError
+            symbol = str(task["symbol"]).strip().upper()
+            requested_start = max(START_FLOOR, date.fromisoformat(str(task["requested_start"])))
+            requested_end = date.fromisoformat(str(task["requested_end"]))
+            task_id = str(task["task_id"]).strip()
+            if not symbol or not task_id or requested_start > requested_end or requested_end != target or symbol in selected:
+                raise ValueError
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("gap_queue_invalid") from exc
+        if symbol in eligible:
+            selected[symbol] = {"requested_start": requested_start.isoformat(), "task_id": task_id}
+    return target, selected
 
 
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:
@@ -241,6 +287,16 @@ def _validate_normalized(frame: pd.DataFrame, start: date, end: date) -> None:
 
 
 def _error_code(exc: Exception) -> str:
+    name = type(exc).__name__
+    text = str(exc).lower()
+    if name == "YFRateLimitError" or "http 429" in text or "http_429" in text:
+        return "http_429"
+    if "http 401" in text or "http_401" in text:
+        return "http_401"
+    if "http 403" in text or "http_403" in text:
+        return "http_403"
+    if "authorization" in text or "unauthorized" in text:
+        return "provider_authorization_failed"
     if isinstance(exc, ValueError) and str(exc) in {
         "response_date_outside_requested_window", "invalid_non_finite_ohlcv",
         "invalid_ohlcv_range", "invalid_ohlc_consistency",
@@ -249,6 +305,10 @@ def _error_code(exc: Exception) -> str:
     if isinstance(exc, ValueError):
         return "invalid_response"
     return "download_or_storage_failed"
+
+
+def _requires_immediate_provider_stop(error_code: str) -> bool:
+    return error_code in {"http_401", "http_403", "http_429", "provider_authorization_failed"}
 
 
 def _load_existing(path: Path) -> pd.DataFrame | None:
@@ -283,6 +343,7 @@ def run_sync(
     max_runtime_seconds: float = 0,
     monotonic: Callable[[], float] = time.monotonic,
     baseline_index: Path | None = None,
+    gap_queue: Path | None = None,
 ) -> dict[str, Any]:
     """Synchronize active Stock/ETF symbols, preserving every raw response."""
     start = max(start, START_FLOOR)
@@ -315,7 +376,9 @@ def run_sync(
         run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
         summary: dict[str, Any] = {"run_id": run_id, "namespace": NAMESPACE, "status": "running",
             "started_at": datetime.now(timezone.utc).isoformat(), "requested": 0, "attempted": 0,
-            "success": 0, "failed": 0, "deferred": 0, "max_data_date": None, "circuit_open": False,
+            "success": 0, "failed": 0, "empty_history": 0, "deferred": 0, "max_data_date": None, "circuit_open": False,
+            "last_error_code": None,
+            "target_end": target.isoformat(),
             "bootstrap_lookback_days": bootstrap_lookback_days,
             "bootstrap_window": (
                 "requested start for cold symbols" if bootstrap_lookback_days == 0
@@ -331,20 +394,25 @@ def run_sync(
 
         master = _read_master(security_master)
         baselines = _load_baseline_index(baseline_index, now)
-        required = {"symbol", "status", "asset_type"}
-        if not required.issubset(master.columns):
-            raise ValueError("security_master_missing_required_columns")
-        selected = master[
-            master["status"].fillna("").astype(str).str.casefold().eq("active")
-            & master["asset_type"].fillna("").astype(str).str.casefold().isin({"stock", "etf"})
-        ]["symbol"].dropna().astype(str).str.strip().str.upper()
-        symbols = list(dict.fromkeys(symbol for symbol in selected if symbol))
+        eligible = set(select_sync_symbols(master))
+        gap_tasks: dict[str, dict[str, str]] = {}
+        if gap_queue is not None:
+            plan_target, gap_tasks = _load_gap_queue(gap_queue, eligible, allowed_end)
+            if end is not None and end != plan_target:
+                raise ValueError("gap_queue_target_conflicts_with_end")
+            target = plan_target
+            summary["target_end"] = target.isoformat()
+            summary["gap_queue"] = str(gap_queue)
+            symbols = list(gap_tasks)
+        else:
+            symbols = list(eligible)
         attempts = _latest_attempts(records_path)
         successful_starts = _earliest_successful_request_starts(records_path)
-        symbols.sort(key=lambda symbol: (attempts.get(symbol, ""), symbol))
+        if gap_queue is None:
+            symbols.sort(key=lambda symbol: (attempts.get(symbol, ""), symbol))
         requested = len(symbols)
         deferred = 0
-        if max_symbols:
+        if max_symbols and gap_queue is None:
             deferred += max(0, len(symbols) - max_symbols)
             symbols = symbols[:max_symbols]
 
@@ -361,31 +429,47 @@ def run_sync(
                 remaining = symbols[index:]
                 summary["deferred"] += len(remaining)
                 summary["runtime_budget_exhausted"] = True
-                for deferred_symbol in remaining:
+                if gap_queue is not None:
+                    # The durable queue is already the source of pending task
+                    # truth.  Do not write every task again on each bounded
+                    # supervisor resume, or the provider journal grows without
+                    # bound while no task was attempted.
                     _append_record(records_path, {
-                        "run_id": run_id, "symbol": deferred_symbol,
-                        "deferred_at": datetime.now(timezone.utc).isoformat(),
-                        "requested_start": None, "requested_end": target.isoformat(),
-                        "namespace": NAMESPACE, "source": PROVIDER, "unqualified": True,
-                        "status": "deferred", "error_code": "runtime_budget_exhausted",
+                        "run_id": run_id, "deferred_at": datetime.now(timezone.utc).isoformat(),
+                        "requested_end": target.isoformat(), "namespace": NAMESPACE, "source": PROVIDER,
+                        "unqualified": True, "status": "deferred", "error_code": "runtime_budget_exhausted",
+                        "scope": "run", "deferred_count": len(remaining),
                     })
+                else:
+                    for deferred_symbol in remaining:
+                        _append_record(records_path, {
+                            "run_id": run_id, "symbol": deferred_symbol,
+                            "deferred_at": datetime.now(timezone.utc).isoformat(),
+                            "requested_start": None, "requested_end": target.isoformat(),
+                            "namespace": NAMESPACE, "source": PROVIDER, "unqualified": True,
+                            "status": "deferred", "error_code": "runtime_budget_exhausted",
+                        })
                 write_progress()
                 break
+            task = gap_tasks.get(symbol)
             destination = data_root / "bars" / "daily" / f"provider={PROVIDER}" / f"namespace={NAMESPACE}" / f"symbol={symbol_key(symbol)}" / "bars.parquet"
             try:
                 existing = _load_existing(destination)
             except Exception as exc:
                 # A malformed current series must never cause a full-history
-                # overwrite.  Record it as a failed sync attempt and let the
-                # circuit breaker protect the rest of the provider run.
+                # overwrite.  It is a local storage/schema fault, not proof
+                # that Yahoo is unavailable for the rest of the queue.
                 summary["attempted"] += 1
-                _append_record(records_path, {"run_id": run_id, "symbol": symbol,
+                current_failure_record = {"run_id": run_id, "symbol": symbol,
                     "attempted_at": datetime.now(timezone.utc).isoformat(), "requested_start": None,
                     "requested_end": target.isoformat(), "namespace": NAMESPACE, "source": PROVIDER,
                     "unqualified": True, "status": "failed", "error_type": type(exc).__name__,
-                    "error_code": "current_bar_read_failed"})
+                    "error_code": "current_bar_read_failed"}
+                if task is not None:
+                    current_failure_record["source_attempted_at"] = task["task_id"]
+                _append_record(records_path, current_failure_record)
                 summary["failed"] += 1
-                consecutive += 1
+                summary["last_error_code"] = "current_bar_read_failed"
                 if consecutive >= max_consecutive_failures:
                     summary["circuit_open"] = True
                     summary["deferred"] += len(symbols) - index - 1
@@ -393,7 +477,11 @@ def run_sync(
                 if consecutive >= max_consecutive_failures:
                     break
                 continue
-            if existing is None:
+            if task is not None:
+                # Scheduler-created tasks represent a known internal gap; do
+                # not allow baseline/current endpoint shortcuts to erase it.
+                request_start = date.fromisoformat(task["requested_start"])
+            elif existing is None:
                 if max_backfill_symbols and limited_backfills >= max_backfill_symbols:
                     # Keep scanning: the bootstrap limit applies only to cold
                     # symbols, while established series must still receive
@@ -433,16 +521,31 @@ def run_sync(
             record: dict[str, Any] = {"run_id": run_id, "symbol": symbol, "attempted_at": datetime.now(timezone.utc).isoformat(),
                 "requested_start": request_start.isoformat(), "requested_end": target.isoformat(), "namespace": NAMESPACE,
                 "source": PROVIDER, "unqualified": True}
+            if task is not None:
+                record["source_attempted_at"] = task["task_id"]
+            phase = "download"
             try:
                 raw = downloader(symbol, request_start, target)
-                if not isinstance(raw, pd.DataFrame) or raw.empty:
-                    raise ValueError("invalid_response")
+                if not isinstance(raw, pd.DataFrame):
+                    raise TypeError("invalid_response")
+                if raw.empty:
+                    record.update({"status": "empty_history", "error_code": "healthy_empty_history",
+                                   "chart_classification": "healthy_empty"})
+                    summary["empty_history"] += 1
+                    consecutive = 0
+                    _append_record(records_path, record)
+                    write_progress()
+                    if request_delay > 0 and index < len(symbols) - 1:
+                        sleep(request_delay)
+                    continue
+                phase = "archive"
                 archive = data_root / "reference" / NAMESPACE / run_id / f"{symbol_key(symbol)}.parquet"
                 _atomic_parquet(raw, archive, index=True)  # archive before normalization/current mutation
                 digest = hashlib.sha256(archive.read_bytes()).hexdigest()
                 record.update({"archive": str(archive), "archive_sha256": digest,
                     "retrieved_at": datetime.now(timezone.utc).isoformat(), "row_count": int(len(raw)),
                     "actions_status": _raw_actions_status(raw)})
+                phase = "normalization"
                 normalized = normalize_bars(raw, symbol, PROVIDER, "raw_ohlc_with_adjusted_close_and_actions")
                 # yfinance Ticker.history indexes daily bars at New York
                 # midnight.  normalize_bars correctly converts timestamps to
@@ -460,6 +563,7 @@ def run_sync(
                 normalized["actions_status"] = record["actions_status"]
                 normalized["retrieved_at"] = record["retrieved_at"]
                 _validate_normalized(normalized, request_start, target)
+                phase = "storage"
                 merged = normalized if existing is None else pd.concat([existing, normalized], ignore_index=True)
                 merged["date"] = pd.to_datetime(merged["date"], errors="raise").dt.normalize()
                 merged = merged.drop_duplicates("date", keep="last").sort_values("date", ignore_index=True)
@@ -470,18 +574,31 @@ def run_sync(
                 summary["max_data_date"] = max(max_day, summary["max_data_date"] or max_day)
                 consecutive = 0
             except Exception as exc:
-                symbol_unavailable = False
+                chart_classification = "unknown"
                 if _is_yfinance_missing_metadata_or_prices(exc):
-                    try:
-                        _raise_if_chart_confirms_symbol_unavailable(symbol)
-                    except ConfirmedSymbolUnavailable:
-                        symbol_unavailable = True
-                record.update({"status": "failed", "error_type": type(exc).__name__,
-                               "error_code": "symbol_unavailable" if symbol_unavailable else _error_code(exc)})
-                summary["failed"] += 1
+                    chart_classification = _chart_history_classification(symbol)
+                symbol_unavailable = chart_classification == "unavailable"
+                healthy_empty = chart_classification == "healthy_empty"
+                error_code = "healthy_empty_history" if healthy_empty else (
+                    "symbol_unavailable" if symbol_unavailable else _error_code(exc)
+                )
+                record.update({"status": "empty_history" if healthy_empty else "failed", "error_type": type(exc).__name__,
+                               "error_code": error_code})
+                if chart_classification != "unknown":
+                    record["chart_classification"] = chart_classification
+                if healthy_empty:
+                    summary["empty_history"] += 1
+                else:
+                    summary["failed"] += 1
+                    summary["last_error_code"] = error_code
                 # Confirmed unavailable symbols are still failed acquisition
-                # attempts, but are not evidence of a provider-wide outage.
-                if not symbol_unavailable:
+                # attempts, but strict response/OHLC validation failures and
+                # confirmed symbol outcomes are not provider-wide outages.
+                if symbol_unavailable or healthy_empty:
+                    consecutive = 0
+                elif _requires_immediate_provider_stop(error_code):
+                    consecutive = max_consecutive_failures
+                elif not (phase == "normalization" and isinstance(exc, ValueError)):
                     consecutive += 1
             _append_record(records_path, record)
             if consecutive >= max_consecutive_failures:
@@ -495,7 +612,7 @@ def run_sync(
         if summary["status"] != "failed":
             if summary["failed"] or summary["circuit_open"]:
                 summary["status"] = "failed"
-            elif summary["deferred"]:
+            elif summary["deferred"] or summary["empty_history"]:
                 summary["status"] = "partial"
                 summary["bootstrap_partial"] = bool(max_backfill_symbols)
             else:
@@ -523,6 +640,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-consecutive-failures", type=int, default=3)
     parser.add_argument("--max-runtime-seconds", type=float, default=0)
     parser.add_argument("--baseline-index", type=Path)
+    parser.add_argument("--gap-queue", type=Path)
     args = parser.parse_args(argv)
     try:
         result = run_sync(**vars(args))

@@ -34,6 +34,45 @@ def test_latest_yahoo_success_does_not_recover(tmp_path):
     assert result["requested"] == result["attempted"] == 0
 
 
+def test_unattempted_gap_uses_backup_without_yahoo_failure(tmp_path):
+    master, root = _setup(tmp_path, [])
+    queue = tmp_path / "queue.json"
+    queue.write_text(json.dumps({"schema_version": "us-daily-gap-queue-v1", "tasks": [
+        {"symbol": "AAA", "task_id": "stable-window-id", "requested_start": "2024-01-02", "requested_end": "2024-01-09"}]}))
+    result = run_recovery(master, root, now=NOW, gap_queue=queue, recovery_provider="alpaca", downloader=lambda *_: _bars())
+    assert result["attempted"] == result["success"] == 1
+    record = json.loads((root / "manifests/alpaca-sip-recovery-v1/records.jsonl").read_text())
+    assert record["source_attempted_at"] == "stable-window-id"
+
+
+def test_default_sip_gap_mode_integrates_batch_and_closes_session(tmp_path, monkeypatch):
+    master, root = _setup(tmp_path, [])
+    queue = tmp_path / "queue.json"
+    queue.write_text(json.dumps({"schema_version": "us-daily-gap-queue-v1", "tasks": [
+        {"symbol": "AAA", "task_id": "stable-window-id", "requested_start": "2024-01-02", "requested_end": "2024-01-09"}]}))
+    monkeypatch.setattr("quant_data.recovery_sync.make_alpaca_downloader", lambda **_kwargs: lambda *_: None)
+    closed = []
+    class Batch:
+        def __call__(self, *_): return _bars()
+        def close(self): closed.append(True)
+    monkeypatch.setattr("quant_data.sip_batch.make_sip_batch_downloader", lambda *_args, **_kwargs: Batch())
+    result = run_recovery(master, root, now=NOW, gap_queue=queue, recovery_provider="alpaca", request_delay=0)
+    assert result["success"] == 1 and result["acquisition_mode"] == "batch_sip"
+    assert closed == [True]
+
+
+def test_rejected_ohlcv_does_not_stop_other_symbols(tmp_path):
+    symbols = ["AAA", "BBB", "CCC", "DDD"]
+    master, root = _setup(tmp_path, [_failure(s) for s in symbols],
+        {"symbol": symbols, "status": ["active"] * 4, "asset_type": ["Stock"] * 4})
+    def download(symbol, *_):
+        frame = _bars()
+        if symbol != "DDD": frame["volume"] = float("nan")
+        return frame
+    result = run_recovery(master, root, now=NOW, downloader=download, request_delay=0)
+    assert result["attempted"] == 4 and result["success"] == 1 and not result["circuit_open"]
+
+
 def test_deferred_does_not_cancel_failure_and_missing_volume_is_rejected(tmp_path):
     master, root = _setup(tmp_path, [_failure(), {**_failure(), "status": "deferred", "observed_at": "2024-01-11T00:00:00+00:00"}])
     frame = _bars()
@@ -133,12 +172,21 @@ def test_alpaca_sip_wrapper_rejects_recent_end_before_network_call():
     called = []
     request = _alpaca_sip_request_wrapper(datetime(2024, 7, 3, 4, 10, tzinfo=timezone.utc), lambda *_args, **_kwargs: called.append(True))
     try:
-        request("url", params={"start": "2024-07-02T00:00:00Z", "end": "2024-07-03T00:00:00Z"}, headers={}, timeout=30)
+        request("url", params={"start": "2024-07-03T00:00:00Z", "end": "2024-07-04T00:00:00Z"}, headers={}, timeout=30)
     except ValueError as exc:
         assert str(exc) == "alpaca_end_within_15_minute_delay_window"
     else:
         raise AssertionError("recent Alpaca end must be rejected")
     assert not called
+
+
+def test_completed_day_before_next_ny_midnight_uses_legal_delayed_cutoff():
+    calls = []
+    wrapper = _alpaca_sip_request_wrapper(datetime(2026, 9, 17, 3, 30, tzinfo=timezone.utc),
+        lambda *_args, **kwargs: calls.append(kwargs) or object())
+    wrapper("url", params={"start": "2026-09-01T00:00:00Z", "end": "2026-09-17T00:00:00Z"}, headers={}, timeout=30)
+    assert calls[0]["params"]["end"] == "2026-09-17T03:15:00Z"
+    assert calls[0]["params"]["start"] == "2026-09-01T04:00:00Z"
 
 
 def test_symbol_specific_unknowns_do_not_stop_full_alpaca_queue(tmp_path):

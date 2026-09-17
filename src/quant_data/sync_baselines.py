@@ -21,7 +21,9 @@ def build_sync_baselines(data_root: Path, output: Path) -> dict[str, object]:
     for pattern in ("symbol=*/bars.parquet", "provider=*/symbol=*/bars.parquet", "provider=*/namespace=*/symbol=*/bars.parquet"):
         for path in root.glob(pattern):
             relative = path.relative_to(root).as_posix()
-            if "namespace=yahoo-daily-v1/" in relative or "synthetic" in relative.lower():
+            if any(f"namespace={namespace}/" in relative for namespace in (
+                "yahoo-daily-v1", "yahoo-symbol-recovery-v1", "nasdaq-daily-recovery-v1", "alpaca-sip-recovery-v1"
+            )) or "synthetic" in relative.lower():
                 continue
             symbol = _symbol(path.parent.name.removeprefix("symbol="))
             if not _safe_raw_relative(relative) or not _QUERY.fullmatch(symbol) or root.resolve() not in path.resolve().parents:

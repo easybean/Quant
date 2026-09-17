@@ -175,3 +175,15 @@ def test_legacy_series_id_remains_readable_and_member_cap_is_fail_closed(tmp_pat
     catalogue.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(DailyQuoteUnavailable, match="过多来源"):
         read_us_daily_bars("us-daily:AAA-cb1ad211", "2024-01-02", "2024-01-02", data_root=root)
+
+
+def test_active_sync_lag_warning_reaches_chart_but_not_historical_symbols(tmp_path):
+    root = _root(tmp_path)
+    (root / "catalogue/us-daily-sync-status-v1.json").write_text(json.dumps({
+        "schema_version": "us-daily-sync-status-v1", "target_date": "2024-01-03", "generated_at": "2024-01-04T12:00:00Z",
+        "symbols": {"AAA": {"state": "needs_update", "latest_date": "2024-01-02"}}}))
+    found = search_us_daily_series("AAA", data_root=root)
+    assert "同步尚未完成" in found["items"][0]["quality_warning"]
+    response = read_us_daily_bars("us-daily:AAA-cb1ad211", "2024-01-02", "2024-01-02", data_root=root)
+    assert "同步尚未完成" in response["quality_warning"]
+    assert "2024-01-03" in response["quality_warning"]

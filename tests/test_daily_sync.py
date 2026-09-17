@@ -15,6 +15,12 @@ from quant_data.pipeline import symbol_key
 NOW = datetime(2024, 1, 10, 23, tzinfo=timezone.utc)
 
 
+def test_empty_history_is_not_reported_as_completed_acquisition(tmp_path):
+    master = _master(tmp_path, ("AAA",))
+    result = run_sync(master, tmp_path / "data", now=NOW, downloader=lambda *_: pd.DataFrame())
+    assert result["empty_history"] == 1 and result["status"] == "partial"
+
+
 def _master(tmp_path, symbols=("AAA", "BBB")):
     path = tmp_path / "master.parquet"
     pd.DataFrame({"symbol": symbols, "status": ["active"] * len(symbols),
@@ -292,6 +298,146 @@ def test_yahoo_missing_timezone_with_diagnostic_network_failure_still_opens_circ
     result = run_sync(master, root, now=NOW, max_consecutive_failures=1,
                       downloader=lambda *_: (_ for _ in ()).throw(YFTzMissingError()), sleep=lambda _: None)
     assert result["failed"] == 1 and result["circuit_open"] and result["deferred"] == 1
+
+
+def test_invalid_ohlcv_is_local_and_does_not_open_provider_circuit(tmp_path):
+    master, root = _master(tmp_path, ("BAD", "GOOD")), tmp_path / "data"
+    bad = _bars(["2024-01-02"])
+    bad.loc[bad.index[0], "High"] = 1.0
+    result = run_sync(master, root, now=NOW, max_consecutive_failures=1,
+                      downloader=lambda symbol, *_: bad if symbol == "BAD" else _bars(["2024-01-02"]),
+                      sleep=lambda _: None)
+    assert result["failed"] == 1 and result["success"] == 1 and not result["circuit_open"]
+
+
+def test_downloader_value_error_is_unknown_provider_failure_and_opens_circuit(tmp_path):
+    master, root = _master(tmp_path, ("AAA", "BBB")), tmp_path / "data"
+    result = run_sync(master, root, now=NOW, max_consecutive_failures=1,
+                      downloader=lambda *_: (_ for _ in ()).throw(ValueError("JSON decode failed")), sleep=lambda _: None)
+    assert result["failed"] == 1 and result["circuit_open"] and result["deferred"] == 1
+    assert result["last_error_code"] == "invalid_response"
+
+
+def test_confirmed_symbol_outcome_resets_prior_provider_failure_count(tmp_path, monkeypatch):
+    class YFPricesMissingError(Exception):
+        pass
+    monkeypatch.setitem(sys.modules, "yfinance", types.SimpleNamespace(
+        exceptions=types.SimpleNamespace(YFPricesMissingError=YFPricesMissingError),
+    ))
+    class Response:
+        status_code = 404
+
+        @staticmethod
+        def json():
+            return {"chart": {"error": {"code": "Not Found"}}}
+    monkeypatch.setitem(sys.modules, "curl_cffi", types.SimpleNamespace(
+        requests=types.SimpleNamespace(get=lambda *_, **__: Response()),
+    ))
+    master, root = _master(tmp_path, ("AAA", "BAD", "GOOD")), tmp_path / "data"
+    def download(symbol, *_):
+        if symbol == "AAA":
+            raise RuntimeError("network fault")
+        if symbol == "BAD":
+            raise YFPricesMissingError()
+        return _bars(["2024-01-02"])
+    result = run_sync(master, root, now=NOW, max_consecutive_failures=2, downloader=download, sleep=lambda _: None)
+    assert result["failed"] == 2 and result["success"] == 1 and not result["circuit_open"]
+
+
+def test_chart_diagnostic_distinguishes_healthy_empty_from_unknown(tmp_path, monkeypatch):
+    class YFPricesMissingError(Exception):
+        pass
+    monkeypatch.setitem(sys.modules, "yfinance", types.SimpleNamespace(
+        exceptions=types.SimpleNamespace(YFPricesMissingError=YFPricesMissingError),
+    ))
+    class Response:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"chart": {"result": [{"timestamp": []}], "error": None}}
+    monkeypatch.setitem(sys.modules, "curl_cffi", types.SimpleNamespace(
+        requests=types.SimpleNamespace(get=lambda *_, **__: Response()),
+    ))
+    master, root = _master(tmp_path, ("EMPTY", "GOOD")), tmp_path / "data"
+    result = run_sync(master, root, now=NOW, max_consecutive_failures=1,
+                      downloader=lambda symbol, *_: (_ for _ in ()).throw(YFPricesMissingError()) if symbol == "EMPTY" else _bars(["2024-01-02"]),
+                      sleep=lambda _: None)
+    assert result["empty_history"] == 1 and result["success"] == 1 and not result["circuit_open"]
+    records = [json.loads(line) for line in (root / "manifests" / NAMESPACE / "records.jsonl").read_text().splitlines()]
+    assert next(row for row in records if row["symbol"] == "EMPTY")["chart_classification"] == "healthy_empty"
+
+
+def _gap_queue(tmp_path, tasks, target="2024-01-09"):
+    path = tmp_path / "gap-queue.json"
+    path.write_text(json.dumps({"schema_version": "us-daily-gap-queue-v1", "target_date": target, "tasks": tasks}), encoding="utf-8")
+    return path
+
+
+def test_gap_queue_attempts_planned_gap_even_when_unattempted_or_baseline_current(tmp_path):
+    master, root = _master(tmp_path, ("AAA", "INACTIVE")), tmp_path / "data"
+    # The inactive task is ignored; the explicit active gap cannot be skipped
+    # just because the baseline says its endpoint is current.
+    queue = _gap_queue(tmp_path, [
+        {"symbol": "AAA", "requested_start": "2024-01-03", "requested_end": "2024-01-09", "task_id": "gap-aaa"},
+        {"symbol": "INACTIVE", "requested_start": "2024-01-03", "requested_end": "2024-01-09", "task_id": "gap-inactive"},
+    ])
+    # Mark the second symbol inactive after the common helper has constructed
+    # the fixture's initial active rows.
+    frame = pd.read_parquet(master); frame.loc[frame.symbol == "INACTIVE", "status"] = "inactive"; frame.to_parquet(master, index=False)
+    baseline = _baseline(tmp_path, {"AAA": "2024-01-09"})
+    calls = []
+    result = run_sync(master, root, now=NOW, gap_queue=queue, baseline_index=baseline,
+                      downloader=lambda symbol, start, end: calls.append((symbol, start, end)) or _bars(["2024-01-03"]),
+                      sleep=lambda _: None)
+    assert calls == [("AAA", date(2024, 1, 3), date(2024, 1, 9))]
+    assert result["requested"] == result["attempted"] == 1 and result["target_end"] == "2024-01-09"
+    record = json.loads((root / "manifests" / NAMESPACE / "records.jsonl").read_text())
+    assert record["source_attempted_at"] == "gap-aaa"
+
+
+def test_gap_queue_repairs_earlier_internal_gap_for_existing_series(tmp_path):
+    master, root = _master(tmp_path, ("AAA",)), tmp_path / "data"
+    current = root / "bars/daily/provider=yfinance/namespace=yahoo-daily-v1" / f"symbol={symbol_key('AAA')}" / "bars.parquet"
+    current.parent.mkdir(parents=True)
+    pd.DataFrame({"date": [pd.Timestamp("2024-01-09")], "source": ["yfinance"], "open": [1.], "high": [2.], "low": [.5], "close": [1.5], "volume": [1]}).to_parquet(current, index=False)
+    queue = _gap_queue(tmp_path, [{"symbol": "AAA", "requested_start": "2024-01-03", "requested_end": "2024-01-09", "task_id": "older-gap"}])
+    calls = []
+    run_sync(master, root, now=NOW, gap_queue=queue,
+             downloader=lambda _s, start, end: calls.append((start, end)) or _bars(["2024-01-03"]), sleep=lambda _: None)
+    assert calls == [(date(2024, 1, 3), date(2024, 1, 9))]
+
+
+def test_gap_queue_current_read_failure_keeps_task_marker(tmp_path):
+    master, root = _master(tmp_path, ("AAA",)), tmp_path / "data"
+    current = root / "bars/daily/provider=yfinance/namespace=yahoo-daily-v1" / f"symbol={symbol_key('AAA')}" / "bars.parquet"
+    current.parent.mkdir(parents=True)
+    current.write_bytes(b"corrupt")
+    queue = _gap_queue(tmp_path, [{"symbol": "AAA", "requested_start": "2024-01-03", "requested_end": "2024-01-09", "task_id": "corrupt-gap"}])
+    run_sync(master, root, now=NOW, gap_queue=queue, downloader=lambda *_: pytest.fail("must not download"), sleep=lambda _: None)
+    record = json.loads((root / "manifests" / NAMESPACE / "records.jsonl").read_text())
+    assert record["error_code"] == "current_bar_read_failed" and record["source_attempted_at"] == "corrupt-gap"
+
+
+def test_gap_queue_rejects_future_plan_target(tmp_path):
+    master, root = _master(tmp_path, ("AAA",)), tmp_path / "data"
+    queue = _gap_queue(tmp_path, [{"symbol": "AAA", "requested_start": "2024-01-03", "requested_end": "2024-01-10", "task_id": "future"}], target="2024-01-10")
+    with pytest.raises(ValueError, match="gap_queue_invalid"):
+        run_sync(master, root, now=NOW, gap_queue=queue, sleep=lambda _: None)
+
+
+def test_gap_queue_runtime_budget_writes_one_run_event_not_every_pending_task(tmp_path):
+    master, root = _master(tmp_path, ("AAA", "BBB")), tmp_path / "data"
+    queue = _gap_queue(tmp_path, [
+        {"symbol": "AAA", "requested_start": "2024-01-03", "requested_end": "2024-01-09", "task_id": "one"},
+        {"symbol": "BBB", "requested_start": "2024-01-03", "requested_end": "2024-01-09", "task_id": "two"},
+    ])
+    ticks = iter((0.0, 5.0))
+    result = run_sync(master, root, now=NOW, gap_queue=queue, max_runtime_seconds=1, monotonic=lambda: next(ticks),
+                      downloader=lambda *_: pytest.fail("must not download"), sleep=lambda _: None)
+    records = [json.loads(line) for line in (root / "manifests" / NAMESPACE / "records.jsonl").read_text().splitlines()]
+    assert result["deferred"] == 2 and len(records) == 1
+    assert records[0]["scope"] == "run" and records[0]["deferred_count"] == 2
 
 
 def test_runtime_budget_defers_without_claiming_attempts(tmp_path):

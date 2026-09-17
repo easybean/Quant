@@ -202,7 +202,28 @@ def search_us_daily_series(query: str, limit: int = 10, *, data_root: str | Path
     exact = [item for item in composites if item["symbol"] == normalized]
     partial = [item for item in composites if item["symbol"] != normalized and normalized in item["symbol"]]
     matches = exact + partial
-    return {"schema_version": DAILY_BROWSER_SCHEMA_VERSION, "items": [_public_series(entry) for entry in matches[:limit]], "limit": limit}
+    items = [_public_series(entry) for entry in matches[:limit]]
+    _attach_sync_status(items, _data_root(data_root))
+    return {"schema_version": DAILY_BROWSER_SCHEMA_VERSION, "items": items, "limit": limit}
+
+
+def _attach_sync_status(items: list[dict[str, Any]], root: Path) -> None:
+    # Only the server-published active acquisition pool receives a stale warning;
+    # historical/delisted records are not expected to have today's bar.
+    status_path = root / "catalogue/us-daily-sync-status-v1.json"
+    try:
+        status = json.loads(status_path.read_text(encoding="utf-8"))
+        if isinstance(status, dict) and status.get("schema_version") == "us-daily-sync-status-v1" and isinstance(status.get("symbols"), dict):
+            for item in items:
+                symbol_status = status.get("symbols", {}).get(item["symbol"])
+                if symbol_status:
+                    item["sync_status"] = {**symbol_status, "target_date": status["target_date"], "checked_at": status["generated_at"]}
+                    if symbol_status.get("state") == "needs_update":
+                        item["quality_warning"] = f"同步尚未完成：目标交易日 {status['target_date']}，实际行情末日 {item['last_date']}；可能还存在中间缺口。" + str(item["quality_warning"])
+                    elif symbol_status.get("state") == "missing_sessions_candidate":
+                        item["quality_warning"] = "行情末日已更新，但历史中间交易日存在待核实缺口，不能视为完整数据。" + str(item["quality_warning"])
+    except (OSError, ValueError, TypeError, KeyError):
+        pass  # Absent/unreadable status is unknown, never advertised as current.
 
 
 def _public_series(entry: dict[str, Any]) -> dict[str, object]:
@@ -288,8 +309,10 @@ def read_us_daily_bars(series_id: str, start: str, end: str, *, data_root: str |
     if selected is None and legacy_selected is None:
         raise DailyQuoteInputError("series_id is not in the fixed daily catalogue")
     if legacy_selected is not None and selected is None:
+        _attach_sync_status([legacy_selected], root)
         return _read_one_series(legacy_selected, start_date, end_date, root)
     assert selected is not None
+    _attach_sync_status([selected], root)
     members = list(selected["_members"])
     if not 1 <= len(members) <= MAX_COMPOSITE_MEMBERS:
         raise DailyQuoteUnavailable("该行情展示视图包含过多来源文件，拒绝读取")
