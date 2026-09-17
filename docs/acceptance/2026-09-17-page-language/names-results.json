@@ -1,0 +1,195 @@
+{
+  "results": [
+    {
+      "id": "workbench",
+      "label": "研究工作台",
+      "status": "passed"
+    },
+    {
+      "id": "run-overview",
+      "label": "运行概览",
+      "status": "passed"
+    },
+    {
+      "id": "market-browser",
+      "label": "行情浏览",
+      "status": "passed"
+    },
+    {
+      "id": "instruments",
+      "label": "证券档案",
+      "status": "passed"
+    },
+    {
+      "id": "data-catalog",
+      "label": "数据覆盖与质量",
+      "status": "passed"
+    },
+    {
+      "id": "corporate-actions",
+      "label": "分红、拆股与退市",
+      "status": "passed"
+    },
+    {
+      "id": "index-constituents",
+      "label": "指数成分股",
+      "status": "passed"
+    },
+    {
+      "id": "derivatives-reference",
+      "label": "期货与加密资料",
+      "status": "passed"
+    },
+    {
+      "id": "factor-catalogue",
+      "label": "选股指标（因子）",
+      "status": "passed"
+    },
+    {
+      "id": "factor-research",
+      "label": "指标检验",
+      "status": "passed"
+    },
+    {
+      "id": "datasets",
+      "label": "研究股票池",
+      "status": "passed"
+    },
+    {
+      "id": "experiments",
+      "label": "研究记录",
+      "status": "passed"
+    },
+    {
+      "id": "strategy-templates",
+      "label": "策略模板",
+      "status": "passed"
+    },
+    {
+      "id": "my-strategies",
+      "label": "我的策略",
+      "status": "passed"
+    },
+    {
+      "id": "strategy-details",
+      "label": "策略详情",
+      "status": "passed"
+    },
+    {
+      "id": "new-backtest",
+      "label": "新建回测",
+      "status": "passed"
+    },
+    {
+      "id": "backtest-jobs",
+      "label": "回测任务",
+      "status": "passed"
+    },
+    {
+      "id": "backtest-reports",
+      "label": "回测报告",
+      "status": "passed"
+    },
+    {
+      "id": "result-comparison",
+      "label": "结果对比",
+      "status": "passed"
+    },
+    {
+      "id": "robustness",
+      "label": "策略可靠性检验",
+      "status": "passed"
+    },
+    {
+      "id": "portfolio-config",
+      "label": "策略资金分配",
+      "status": "passed"
+    },
+    {
+      "id": "paper-accounts",
+      "label": "模拟账户",
+      "status": "passed"
+    },
+    {
+      "id": "positions-cash",
+      "label": "持仓与资金",
+      "status": "passed"
+    },
+    {
+      "id": "cash-ledger",
+      "label": "资金流水",
+      "status": "passed"
+    },
+    {
+      "id": "run-instances",
+      "label": "模拟策略运行",
+      "status": "passed"
+    },
+    {
+      "id": "trade-monitoring",
+      "label": "交易监控",
+      "status": "passed"
+    },
+    {
+      "id": "orders-fills",
+      "label": "订单与成交",
+      "status": "passed"
+    },
+    {
+      "id": "reconciliation",
+      "label": "模拟对账",
+      "status": "passed"
+    },
+    {
+      "id": "risk-rules",
+      "label": "风险规则",
+      "status": "passed"
+    },
+    {
+      "id": "risk-dashboard",
+      "label": "风险看板",
+      "status": "passed"
+    },
+    {
+      "id": "risk-events",
+      "label": "风险事件",
+      "status": "passed"
+    },
+    {
+      "id": "returns-risk",
+      "label": "收益与风险",
+      "status": "passed"
+    },
+    {
+      "id": "cost-analysis",
+      "label": "成本分析",
+      "status": "passed"
+    },
+    {
+      "id": "attribution",
+      "label": "收益来源分析",
+      "status": "passed"
+    },
+    {
+      "id": "connections",
+      "label": "数据来源配置",
+      "status": "passed"
+    },
+    {
+      "id": "resources",
+      "label": "后台任务",
+      "status": "passed"
+    },
+    {
+      "id": "security",
+      "label": "用户与安全",
+      "status": "passed"
+    },
+    {
+      "id": "maintenance",
+      "label": "备份与维护",
+      "status": "passed"
+    }
+  ],
+  "pageErrors": []
+}

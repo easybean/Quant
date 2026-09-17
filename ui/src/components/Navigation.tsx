@@ -46,7 +46,11 @@ export function Navigation({ activeId, expandedGroupId, collapsed, mobileOpen, o
                       key={child.id}
                       type="button"
                       onClick={() => onNavigate(child.id)}
-                    >{child.label}</button>
+                      title={child.availability === 'planned' ? `${child.label}：待开发` : undefined}
+                    >
+                      {child.label}
+                      {child.availability === 'planned' && <span className="nav-availability status-tag" aria-hidden="true">待开发</span>}
+                    </button>
                   ))}
                 </div>}
               </section>

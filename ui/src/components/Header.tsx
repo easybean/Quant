@@ -18,11 +18,11 @@ export function Header({ group, child, theme, onToggleTheme, onOpenMenu }: Heade
         <span>{group.label}</span><span className="breadcrumb-divider">/</span><strong>{child.label}</strong>
       </div>
       <div className="topbar-actions">
-        <label className="global-search"><Search size={16} /><input type="search" placeholder="搜索功能、因子或资产" aria-label="全局搜索（仅界面原型）" /></label>
-        <span className="environment-badge">模拟环境</span>
+        <label className="global-search" title="全局搜索尚未开发，请使用各页面的搜索框"><Search size={16} /><input type="search" disabled placeholder="全局搜索待开发" aria-label="全局搜索尚未开发" /></label>
+        <span className="environment-badge">研究环境 · 非实盘</span>
         <span className="data-status"><i aria-hidden="true" /> 接口状态见工作台</span>
         <ThemeToggle theme={theme} onToggle={onToggleTheme} />
-        <button className="icon-button notification-button" type="button" aria-label="通知（当前没有新通知）"><Bell size={18} /><span /></button>
+        <span className="icon-button" title="通知功能尚未开发" aria-label="通知功能尚未开发"><Bell size={18}/></span>
       </div>
     </header>
   )

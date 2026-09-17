@@ -60,7 +60,7 @@ export function MarketBrowser() {
   const title = useMemo(() => data ? `${data.series.symbol} · ${intervalLabels[interval]}行情` : '选择一只股票', [data, interval])
 
   return <div className="market-browser-page">
-    <section className="page-heading"><div><p className="eyebrow">市场与数据 · 股票行情</p><h1>行情浏览</h1><p>同一只股票统一展示历史行情与每日更新；原始来源保留。浏览行情不代表复权、总回报或回测数据已验证。</p></div><span className="static-boundary">只读 · 行情浏览</span></section>
+    <section className="page-heading"><div><p className="eyebrow">行情与资料 · 股票行情</p><h1>行情浏览</h1><p>同一只股票统一展示历史行情与每日更新；原始来源保留。浏览行情不代表复权、总回报或回测数据已验证。</p></div><span className="static-boundary">只读 · 行情浏览</span></section>
     <section className="quote-controls" aria-label="股票搜索">
       <label><Search size={16}/><span className="required-mark" aria-hidden="true">*</span><input required value={query} onChange={event => setQuery(event.target.value.toUpperCase())} maxLength={32} placeholder="输入证券代码，如 SPY" aria-label="搜索证券代码（必填）" onKeyDown={event => { if (event.key === 'Enter') void search() }} /></label>
       <button type="button" className="quote-primary" disabled={loading} onClick={() => void search()}>{loading ? '读取中…' : '搜索行情'}</button>

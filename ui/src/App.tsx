@@ -15,6 +15,7 @@ import { RiskPolicyWorkspace } from './components/RiskPolicyWorkspace'
 import { DataSourceWorkspace } from './components/DataSourceWorkspace'
 import { PaperAccountWorkspace } from './components/PaperAccountWorkspace'
 import { MarketBrowser } from './components/MarketBrowser'
+import { PageUsage } from './components/PageUsage'
 import { findNavGroup, findNavItem } from './navigation'
 
 export default function App() {
@@ -40,14 +41,14 @@ export default function App() {
   else if (activeId === 'factor-research') content = <FactorResearch />
   else if (activeId === 'new-backtest') content = <BacktestWizard />
   else if (activeId === 'strategy-templates') content = <StrategyWorkspace />
-  else if (activeId === 'my-strategies' || activeId === 'strategy-details') content = <VisualStrategyWorkspace onNavigate={navigate} />
+  else if (activeId === 'my-strategies' || activeId === 'strategy-details') content = <VisualStrategyWorkspace onNavigate={navigate} pageTitle={child.label} />
   else if (activeId === 'instruments') content = <SecurityCatalogueWorkspace />
   else if (activeId === 'datasets') content = <AssetPoolWorkspace onNavigate={navigate} />
   else if (activeId === 'risk-rules') content = <RiskPolicyWorkspace />
   else if (activeId === 'connections') content = <DataSourceWorkspace />
-  else if (activeId === 'paper-accounts' || activeId === 'orders-fills' || activeId === 'cash-ledger') content = <PaperAccountWorkspace />
-  else if (activeId === 'experiments') content = <TaskOverview view="experiments" />
-  else if (activeId === 'backtest-jobs' || activeId === 'resources') content = <TaskOverview view="jobs" />
+  else if (activeId === 'paper-accounts' || activeId === 'orders-fills' || activeId === 'cash-ledger') content = <PaperAccountWorkspace pageTitle={child.label} />
+  else if (activeId === 'experiments') content = <TaskOverview view="experiments" pageTitle={child.label} />
+  else if (activeId === 'backtest-jobs' || activeId === 'resources') content = <TaskOverview view="jobs" pageTitle={child.label} />
   else content = <PlaceholderPage group={group} child={child} />
-  return <Layout activeId={activeId} activeGroup={group} activeChild={child} expandedGroupId={expandedGroupId} collapsed={collapsed} mobileOpen={mobileOpen} theme={theme} onNavigate={navigate} onToggleGroup={toggleGroup} onToggleCollapsed={() => setCollapsed((value) => !value)} onToggleTheme={() => setTheme((value) => value === 'light' ? 'dark' : 'light')} onOpenMenu={() => setMobileOpen(true)} onCloseMobile={() => setMobileOpen(false)}>{content}</Layout>
+  return <Layout activeId={activeId} activeGroup={group} activeChild={child} expandedGroupId={expandedGroupId} collapsed={collapsed} mobileOpen={mobileOpen} theme={theme} onNavigate={navigate} onToggleGroup={toggleGroup} onToggleCollapsed={() => setCollapsed((value) => !value)} onToggleTheme={() => setTheme((value) => value === 'light' ? 'dark' : 'light')} onOpenMenu={() => setMobileOpen(true)} onCloseMobile={() => setMobileOpen(false)}><PageUsage page={child} onNavigate={navigate}/>{content}</Layout>
 }

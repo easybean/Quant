@@ -65,13 +65,13 @@ export function BacktestWizard() {
     return mode === 'formal'
       ? [
           ['策略与订单', '待定', '两套策略模板已定义，但正式调仓/市价语义尚未验收。'],
-          ['资产池与数据', '阻断', availability.formal_backtest_reason],
-          ['区间与可用时点', '阻断', '尚无可用于正式回测的固定资产池快照，不能把现有下载目录当作合格输入。'],
+          ['股票池与数据', '阻断', availability.formal_backtest_reason],
+          ['区间与可用时点', '阻断', '尚无可用于正式回测的固定股票池快照，不能把现有下载目录当作合格输入。'],
           ['资金与成本', '阻断', '真实手续费、滑点、成交量约束和公司行为/退市总回报尚未完成验收。'],
         ]
       : [
           ['策略', '通过', template === 'buy_and_hold' ? '买入持有 v1，ACME。' : '双均线 v1，ACME，快线 2 / 慢线 3。'],
-          ['资产池与数据', '通过', `${synthetic.asset_pool_version} · ${synthetic.dataset_version}`],
+          ['股票池与数据', '通过', `${synthetic.asset_pool_version} · ${synthetic.dataset_version}`],
           ['区间与成交', '通过', '固定 2024-01-02 至 2024-01-04；仅买入限价，显式成交 4 股、撤余下 6 股。'],
           ['资金与成本', '通过', '初始 USD 1,000；限价 USD 100；首次成交固定手续费 USD 1；无滑点。'],
         ]
@@ -95,7 +95,7 @@ export function BacktestWizard() {
   }
 
   return <div className="backtest-wizard">
-    <section className="page-heading"><div><p className="eyebrow">回测中心 · 受控提交</p><h1>新建回测</h1><p>先检查策略、数据、执行能力与成本。正式回测未验收时不会创建任务或生成虚构结果。</p></div><span className="static-boundary">持久化任务 · 提交前门禁</span></section>
+    <section className="page-heading"><div><p className="eyebrow">历史回测 · 受控提交</p><h1>新建回测</h1><p>先检查策略、数据、执行能力与成本。正式回测未验收时不会创建任务或生成虚构结果。</p></div><span className="static-boundary">持久化任务 · 提交前门禁</span></section>
     {error ? <section className="empty-state wide"><AlertCircle size={24}/><strong>无法继续</strong><p>{error}</p><button className="detail-action data-retry" onClick={() => setAttempt(value => value + 1)}><RefreshCw size={15}/>重新读取门禁</button></section> : !availability ? <section className="empty-state wide"><LoaderCircle size={24} className="animate-spin"/><strong>正在读取回测能力</strong><p>只读取服务端能力登记，不会扫描行情或创建任务。</p></section> : <>
       <div className="wizard-mode-grid">
         <button type="button" className={`wizard-mode ${mode === 'formal' ? 'is-active' : ''}`} onClick={() => { setMode('formal'); setAcknowledged(false); setJob(null) }}><ShieldAlert size={19}/><span><strong>正式美股日线回测</strong><small>当前受 P3-03A 数据与成本门禁阻断</small></span></button>
@@ -104,14 +104,14 @@ export function BacktestWizard() {
       <section className="wizard-shell">
         <div className="wizard-steps" aria-label="回测配置步骤">
           <WizardStep number="1" title="策略" text="选定版本化模板" />
-          <WizardStep number="2" title="资产池" text="固定快照与范围" />
+          <WizardStep number="2" title="股票池" text="固定快照与范围" />
           <WizardStep number="3" title="区间" text="可用时点与日历" />
           <WizardStep number="4" title="资金与成本" text="成交假设" />
           <WizardStep number="5" title="提交检查" text="能力与数据门禁" />
         </div>
         <div className="wizard-content">
           <section className="wizard-card"><h2>配置摘要</h2><div className="strategy-picker"><button type="button" className={template === 'buy_and_hold' ? 'is-selected' : ''} onClick={() => setTemplate('buy_and_hold')}><strong>买入持有</strong><span>buy-and-hold-v1</span></button><button type="button" className={template === 'dual_moving_average' ? 'is-selected' : ''} onClick={() => setTemplate('dual_moving_average')}><strong>双均线</strong><span>dual-moving-average-v1</span></button></div>
-            <dl className="wizard-summary"><div><dt>资产池</dt><dd>{mode === 'formal' ? '未登记合格的真实资产池' : 'synthetic-us-equity-pool-v1 · ACME'}</dd></div><div><dt>日期区间</dt><dd>{mode === 'formal' ? '待 P3-03A 固定快照后选择' : '2024-01-02 至 2024-01-04（不可编辑验收输入）'}</dd></div><div><dt>资金</dt><dd>{mode === 'formal' ? '正式账户与保证金模型未开放' : 'USD 1,000 初始现金；不使用保证金'}</dd></div><div><dt>成本与成交</dt><dd>{mode === 'formal' ? '真实成本模型未验收' : '买入限价 USD 100；首次成交费 USD 1；无滑点'}</dd></div></dl>
+            <dl className="wizard-summary"><div><dt>股票池</dt><dd>{mode === 'formal' ? '未登记合格的真实股票池' : 'synthetic-us-equity-pool-v1 · ACME'}</dd></div><div><dt>日期区间</dt><dd>{mode === 'formal' ? '待 P3-03A 固定快照后选择' : '2024-01-02 至 2024-01-04（不可编辑验收输入）'}</dd></div><div><dt>资金</dt><dd>{mode === 'formal' ? '正式账户与保证金模型未开放' : 'USD 1,000 初始现金；不使用保证金'}</dd></div><div><dt>成本与成交</dt><dd>{mode === 'formal' ? '真实成本模型未验收' : '买入限价 USD 100；首次成交费 USD 1；无滑点'}</dd></div></dl>
           </section>
           <section className="wizard-card preflight"><h2>提交前检查</h2>{preflight.map(([name, status, detail]) => <div className="preflight-row" key={name}><span className={`preflight-status ${status === '通过' ? 'pass' : status === '阻断' ? 'blocked' : ''}`}>{status === '通过' ? <CheckCircle2 size={15}/> : <CircleAlert size={15}/>} {status}</span><div><strong>{name}</strong><p>{detail}</p></div></div>)}</section>
           {mode === 'formal' ? <section className="wizard-blocked"><ShieldAlert size={19}/><div><strong>正式回测不会提交</strong><p>{availability.formal_backtest_reason} 完成前，日期、资金和成本输入不能绕过门禁。</p></div></section> : <section className={`wizard-ack ${acknowledged ? 'is-acknowledged' : ''}`}><button type="button" aria-pressed={acknowledged} onClick={() => setAcknowledged(value => !value)}>{acknowledged ? <CheckCircle2 size={18}/> : <CircleAlert size={18}/>}</button><div><strong>我理解这只是合成验收，不是历史收益回测</strong><p>{availability.synthetic_acceptance.scope}</p></div></section>}

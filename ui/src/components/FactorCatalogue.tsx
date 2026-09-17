@@ -39,7 +39,7 @@ export function FactorCatalogue() {
   }
 
   return <div className="catalogue-page">
-    <section className="page-heading catalogue-heading"><div><p className="eyebrow">研究实验室 · 因子百科</p><h1>因子百科</h1><p>浏览真实目录中的指标定义、输入要求和适用边界。</p></div><span className="static-boundary">真实目录 · 预测能力未验证</span></section>
+    <section className="page-heading catalogue-heading"><div><p className="eyebrow">研究工具 · 选股指标（因子）</p><h1>选股指标（因子）</h1><p>浏览真实目录中的指标定义、输入要求和适用边界。</p></div><span className="static-boundary">真实目录 · 预测能力未验证</span></section>
     <section className="catalogue-layout">
       <aside className="catalogue-categories" aria-label="因子分类"><p>技术因子分类</p>{categories.map((item) => <button type="button" key={item.name} className={item.name === category ? 'is-active' : ''} onClick={() => chooseCategory(item.name)}>{item.name}<span>{item.count}</span></button>)}</aside>
       <section className="factor-list-panel">

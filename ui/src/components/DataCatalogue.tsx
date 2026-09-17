@@ -34,7 +34,7 @@ export function DataCatalogue() {
 
   return <div className="data-catalogue-page">
     <section className="page-heading">
-      <div><p className="eyebrow">市场与数据 · 只读目录</p><h1>数据目录</h1><p>展示预生成的数据盘点、质量与版本快照；刷新页面不会扫描行情或启动下载。</p></div>
+      <div><p className="eyebrow">行情与资料 · 只读目录</p><h1>数据覆盖与质量</h1><p>展示预生成的数据盘点、质量与版本快照；刷新页面不会扫描行情或启动下载。</p></div>
       <span className="static-boundary">只读快照 · 不提供下载入口</span>
     </section>
     {error ? <CatalogueState icon={<AlertCircle size={24} />} title="无法加载数据目录" message={error} retry={() => setAttempt((value) => value + 1)} /> : !catalogue ? <CatalogueState icon={<LoaderCircle size={24} className="animate-spin" />} title="正在加载数据目录" message="正在读取预生成的盘点和质量快照。" /> : <>
