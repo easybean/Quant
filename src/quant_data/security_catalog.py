@@ -49,6 +49,7 @@ class SecurityCatalogueStore:
               delisting_date TEXT, source TEXT, source_as_of TEXT, sources_json TEXT,
               provenance_json TEXT, quarantined INTEGER NOT NULL, quarantine_reason TEXT,
               identity_status TEXT NOT NULL, research_qualified INTEGER NOT NULL,
+              current_checksum TEXT,
               imported_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS catalogue_records_symbol ON catalogue_records(symbol);
@@ -65,6 +66,12 @@ class SecurityCatalogueStore:
               FOREIGN KEY(catalog_id) REFERENCES catalogue_records(catalog_id)
             );
             """)
+            # Older catalogues predate the explicit linkage from the mutable
+            # catalogue projection to the immutable import manifest.  Leave
+            # their rows unlinked rather than guessing a source version.
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(catalogue_records)")}
+            if "current_checksum" not in columns:
+                db.execute("ALTER TABLE catalogue_records ADD COLUMN current_checksum TEXT")
 
     def import_master(self, master_path: str | Path) -> dict[str, Any]:
         path = Path(master_path)
@@ -90,6 +97,19 @@ class SecurityCatalogueStore:
                 # churn timestamps or replace lineage on a retry.
                 existing = db.execute("SELECT source_as_of,source_rows,imported_records FROM catalogue_import_manifests WHERE checksum=?", (checksum,)).fetchone()
                 if existing is not None:
+                    # A pre-P2-06B catalogue can have a manifest but no
+                    # immutable rows/current linkage.  Re-reading the exact
+                    # byte-identical source is sufficient evidence to add
+                    # those missing snapshots.  Do not overwrite a record
+                    # that a later import has made current.
+                    for row in rows:
+                        db.execute("INSERT OR IGNORE INTO catalogue_record_snapshots(checksum,catalog_id,record_json) VALUES (?,?,?)", (checksum, row["catalog_id"], json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":"))))
+                        db.execute("""
+                            UPDATE catalogue_records SET current_checksum=?
+                            WHERE catalog_id=? AND current_checksum IS NULL
+                              AND raw_symbol IS ? AND name IS ? AND source IS ?
+                              AND source_as_of IS ? AND sources_json=? AND provenance_json=?
+                        """, (checksum, row["catalog_id"], row["raw_symbol"], row["name"], row["source"], row["source_as_of"], row["sources_json"], row["provenance_json"]))
                     db.commit()
                     return {"checksum": checksum, "source_as_of": existing["source_as_of"], "source_rows": existing["source_rows"], "imported_records": existing["imported_records"]}
                 for row in rows:
@@ -97,16 +117,17 @@ class SecurityCatalogueStore:
                     INSERT INTO catalogue_records (
                       catalog_id,lifecycle_fingerprint,symbol,raw_symbol,name,exchange,asset_type,status,
                       ipo_date,delisting_date,source,source_as_of,sources_json,provenance_json,
-                      quarantined,quarantine_reason,identity_status,research_qualified,imported_at
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                      quarantined,quarantine_reason,identity_status,research_qualified,current_checksum,imported_at
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     ON CONFLICT(lifecycle_fingerprint) DO UPDATE SET
                       raw_symbol=excluded.raw_symbol,name=excluded.name,source=excluded.source,
                       source_as_of=excluded.source_as_of,sources_json=excluded.sources_json,
                       provenance_json=excluded.provenance_json,
                       quarantined=MAX(catalogue_records.quarantined, excluded.quarantined),
                       quarantine_reason=COALESCE(catalogue_records.quarantine_reason, excluded.quarantine_reason),
+                      current_checksum=excluded.current_checksum,
                       imported_at=excluded.imported_at
-                    """, tuple(row[field] for field in _DB_FIELDS))
+                    """, (*tuple(row[field] for field in _DB_FIELDS[:-1]), checksum, row["imported_at"]))
                 db.execute("""
                     INSERT INTO catalogue_import_manifests(checksum,source_path,source_as_of,source_rows,imported_records,imported_at)
                     VALUES (?,?,?,?,?,?) ON CONFLICT(checksum) DO UPDATE SET
@@ -144,6 +165,37 @@ class SecurityCatalogueStore:
             result = db.execute("SELECT * FROM catalogue_records" + predicate + " ORDER BY CASE WHEN symbol=? THEN 0 ELSE 1 END, symbol, ipo_date, catalog_id LIMIT ? OFFSET ?", [*params, term.upper(), limit, offset]).fetchall()
         return {"items": [_public_record(row) for row in result], "total": total, "total_records": total_records, "quarantined_records": quarantined, "research_qualified": False}
 
+    def snapshot_reference(self, catalog_id: str, source_checksum: str) -> dict[str, Any]:
+        """Return a safe, immutable catalogue member reference.
+
+        The catalogue projection is intentionally mutable as new source files
+        arrive.  A pool must instead retain the source manifest checksum and
+        exact record snapshot that was visible at configuration time.
+        """
+        if not isinstance(catalog_id, str) or not catalog_id.strip():
+            raise SecurityCatalogueInputError("catalog_id is required")
+        if not isinstance(source_checksum, str) or len(source_checksum) != 64 or any(char not in "0123456789abcdef" for char in source_checksum.casefold()):
+            raise SecurityCatalogueInputError("source_checksum must be a SHA-256 manifest checksum")
+        source_checksum = source_checksum.casefold()
+        with self._connect() as db:
+            manifest = db.execute("SELECT 1 FROM catalogue_import_manifests WHERE checksum=?", (source_checksum,)).fetchone()
+            row = db.execute("SELECT record_json FROM catalogue_record_snapshots WHERE checksum=? AND catalog_id=?", (source_checksum, catalog_id.strip())).fetchone()
+            current = db.execute("SELECT quarantined FROM catalogue_records WHERE catalog_id=?", (catalog_id.strip(),)).fetchone()
+        if manifest is None or row is None or current is None:
+            raise SecurityCatalogueInputError("catalogue reference must use an existing source manifest and record snapshot")
+        snapshot = json.loads(row["record_json"])
+        if snapshot.get("catalog_id") != catalog_id.strip():
+            raise SecurityCatalogueInputError("catalogue record snapshot identity mismatch")
+        if bool(snapshot.get("quarantined")) or bool(current["quarantined"]):
+            raise SecurityCatalogueInputError("quarantined catalogue records cannot be referenced by an asset pool")
+        # These are intentionally preserved as facts, not upgraded: a listing
+        # row has no verified permanent identity, market-data binding, calendar
+        # or contract rule and therefore cannot qualify research by itself.
+        snapshot["identity_status"] = "provisional"
+        snapshot["research_qualified"] = False
+        snapshot["source_checksum"] = source_checksum
+        return {"member_type": "security_catalogue_v1", "catalog_id": catalog_id.strip(), "source_checksum": source_checksum, "record_snapshot": snapshot}
+
     def _connect(self) -> sqlite3.Connection:
         db = sqlite3.connect(self.db_path)
         db.row_factory = sqlite3.Row
@@ -167,7 +219,7 @@ def _record_from_source(raw: Mapping[str, Any]) -> dict[str, Any] | None:
 
 
 def _public_record(row: sqlite3.Row) -> dict[str, Any]:
-    return {"catalog_id": row["catalog_id"], "symbol": row["symbol"], "raw_symbol": row["raw_symbol"], "name": row["name"], "exchange": row["exchange"], "asset_type": row["asset_type"], "status": row["status"], "ipo_date": row["ipo_date"], "delisting_date": row["delisting_date"], "source": row["source"], "source_as_of": row["source_as_of"], "sources": json.loads(row["sources_json"]), "provenance": json.loads(row["provenance_json"]), "quarantined": bool(row["quarantined"]), "quarantine_reason": row["quarantine_reason"], "identity_status": row["identity_status"], "research_qualified": False, "imported_at": row["imported_at"]}
+    return {"catalog_id": row["catalog_id"], "symbol": row["symbol"], "raw_symbol": row["raw_symbol"], "name": row["name"], "exchange": row["exchange"], "asset_type": row["asset_type"], "status": row["status"], "ipo_date": row["ipo_date"], "delisting_date": row["delisting_date"], "source": row["source"], "source_as_of": row["source_as_of"], "source_checksum": row["current_checksum"], "sources": json.loads(row["sources_json"]), "provenance": json.loads(row["provenance_json"]), "quarantined": bool(row["quarantined"]), "quarantine_reason": row["quarantine_reason"], "identity_status": row["identity_status"], "research_qualified": False, "imported_at": row["imported_at"]}
 
 
 def _text(value: Any) -> str:

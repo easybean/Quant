@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { AlertCircle, ArrowRight, Database, LoaderCircle, RefreshCw, ShieldAlert } from 'lucide-react'
 import { fetchDataCatalogue, type DataCatalogueResponse } from '../api'
+import { SyncStatusPanel } from './SyncStatusPanel'
 
 const findingLabels: Record<string, string> = {
   missing_required_value: '必需字段缺失',
@@ -33,6 +34,7 @@ export function DataCatalogue() {
   const selectedFindings = finding === 'all' ? findings : findings.filter((item) => item.key === finding)
 
   return <div className="data-catalogue-page">
+    <SyncStatusPanel />
     <section className="page-heading">
       <div><p className="eyebrow">行情与资料 · 只读目录</p><h1>数据覆盖与质量</h1><p>展示预生成的数据盘点、质量与版本快照；刷新页面不会扫描行情或启动下载。</p></div>
       <span className="static-boundary">只读快照 · 不提供下载入口</span>

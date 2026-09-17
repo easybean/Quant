@@ -37,7 +37,8 @@ def _sip_window(start: date, end: date, now: datetime) -> tuple[str, str]:
     if end > _target_end(now_utc):
         raise ValueError("alpaca_end_exceeds_conservative_daily_cutoff")
     start_utc = datetime.combine(start, daytime.min, tzinfo=_NY).astimezone(timezone.utc)
-    following_ny_midnight = datetime.combine(end + timedelta(days=1), daytime.min, tzinfo=_NY).astimezone(timezone.utc)
+    # Alpaca's end is inclusive: exclude the next day's midnight/bar.
+    following_ny_midnight = datetime.combine(end + timedelta(days=1), daytime.min, tzinfo=_NY).astimezone(timezone.utc) - timedelta(microseconds=1)
     cutoff = now_utc - timedelta(minutes=15)
     return (start_utc.isoformat().replace("+00:00", "Z"),
             min(following_ny_midnight, cutoff).isoformat().replace("+00:00", "Z"))

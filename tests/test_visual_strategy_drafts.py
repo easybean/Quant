@@ -18,10 +18,14 @@ def test_visual_strategy_references_versions_and_keeps_history(tmp_path):
     pools, pool = _pool(tmp_path)
     store = VisualStrategyDraftStore(tmp_path, pools); store.initialize()
     first = store.save(_payload(pool))
+    # Saving a later pool version does not mutate a strategy's already-fixed
+    # reference.  This is also the contract used by catalogue-backed pools.
+    pools.save({"name": "Strategy pool revised", "purpose": "test", "instruments": pool["instruments"]}, pool["id"])
     revised = _payload(pool); revised["rebalance_frequency"] = "weekly"
     second = store.save(revised, first["id"])
     assert second["version"] == 2
     assert second["definition"]["asset_pool"]["asset_pool_version"] == 1
+    assert pools.list()[0]["version"] == 2
     assert [row["version"] for row in store.history(first["id"])] == [2, 1]
     assert "formula" not in str(second)
 

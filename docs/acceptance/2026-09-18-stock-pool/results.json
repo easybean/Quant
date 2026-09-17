@@ -1,0 +1,72 @@
+{
+  "passed": true,
+  "pool_id": "09504ff3-a011-48fa-87a4-2f22891779da",
+  "strategy_id": "5ecd6bb3-fef2-4055-8943-a16cf73d288a",
+  "pool_version_after": 2,
+  "strategy_pool_version": 1,
+  "sync": {
+    "available": true,
+    "target_date": "2026-09-16",
+    "generated_at": "2026-09-17T16:22:11.760839+00:00",
+    "active_symbols": 15058,
+    "endpoint_current": 12663,
+    "needs_update": 2395,
+    "historical_only_symbols": 8790,
+    "research_qualified": false,
+    "providers": [
+      {
+        "provider": "alpaca",
+        "status": "success",
+        "success": 549,
+        "failed": 0,
+        "attempted": 549,
+        "last_error_code": null,
+        "finished_at": "2026-09-17T16:21:49.535693+00:00",
+        "resume_after": null
+      },
+      {
+        "provider": "yahoo",
+        "status": "failed",
+        "success": 0,
+        "failed": 3,
+        "attempted": 3,
+        "last_error_code": "download_or_storage_failed",
+        "finished_at": "2026-09-17T15:44:02.284442+00:00",
+        "resume_after": "2026-09-17T16:14:02.285705+00:00"
+      },
+      {
+        "provider": "nasdaq",
+        "status": "failed",
+        "success": 0,
+        "failed": 6,
+        "attempted": 6,
+        "last_error_code": null,
+        "finished_at": "2026-09-17T16:13:25.556327+00:00",
+        "resume_after": null
+      }
+    ],
+    "run_available": true,
+    "run_status": "running",
+    "finished_at": null,
+    "run_target_date": "2026-09-16"
+  },
+  "backtest": {
+    "formal_backtest_available": false,
+    "formal_backtest_reason": "正式美股日线回测未开放：P3-03A 尚未发布具备稳定身份、原始价、可用时点、公司行为适用性和退市范围的合格资产池。",
+    "synthetic_acceptance": {
+      "available": true,
+      "operation": "synthetic_daily_limit",
+      "dataset_version": "synthetic-us-daily-v1",
+      "asset_pool_version": "synthetic-us-equity-pool-v1",
+      "calendar_version": "synthetic-nyse-calendar-v1",
+      "engine_version": "1.221.0",
+      "scope": "仅 P2-05 合成美股日线限价部分成交/撤余单验收；不代表真实回测。",
+      "limitations": [
+        "仅一只合成证券 ACME，固定三根日线与固定时间范围",
+        "仅买入限价单；显式 4 股成交、余下 6 股撤销",
+        "首次成交固定 USD 1 手续费；无滑点、公司行为或退市总回报"
+      ]
+    }
+  },
+  "page_errors": []
+}

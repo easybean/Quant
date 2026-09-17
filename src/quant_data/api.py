@@ -29,6 +29,7 @@ from .risk_policy_drafts import RiskPolicyDraftInputError, RiskPolicyDraftStore
 from .paper_ledger import PaperLedgerInputError, PaperLedgerStore
 from .data_source_drafts import DataSourceDraftInputError, DataSourceDraftStore
 from .security_catalog import SecurityCatalogueStore
+from .sync_status import sync_status_payload
 
 _DEFAULT_ORIGINS = ("http://127.0.0.1:5173", "http://192.168.1.132:8510")
 _SCHEMA_VERSION = "v1"
@@ -135,7 +136,10 @@ def create_app() -> FastAPI:
     instrument_store = InstrumentDraftStore(state_root)
     instrument_store.initialize()
     app.state.instrument_draft_store = instrument_store
-    asset_pool_store = AssetPoolDraftStore(state_root, instrument_store)
+    security_catalogue_store = SecurityCatalogueStore(state_root)
+    security_catalogue_store.initialize()
+    app.state.security_catalogue_store = security_catalogue_store
+    asset_pool_store = AssetPoolDraftStore(state_root, instrument_store, security_catalogue_store)
     asset_pool_store.initialize()
     app.state.asset_pool_draft_store = asset_pool_store
     visual_strategy_store = VisualStrategyDraftStore(state_root, asset_pool_store)
@@ -150,10 +154,6 @@ def create_app() -> FastAPI:
     data_source_store = DataSourceDraftStore(state_root)
     data_source_store.initialize()
     app.state.data_source_draft_store = data_source_store
-    security_catalogue_store = SecurityCatalogueStore(state_root)
-    security_catalogue_store.initialize()
-    app.state.security_catalogue_store = security_catalogue_store
-
     @app.on_event("startup")
     def start_jobs() -> None:
         worker.start()
@@ -165,6 +165,10 @@ def create_app() -> FastAPI:
     @app.get("/api/v1/health")
     def health() -> dict[str, str]:
         return {"status": "ok", "schema_version": _SCHEMA_VERSION}
+
+    @app.get("/api/v1/us-daily-sync-status")
+    def us_daily_sync_status() -> dict[str, object]:
+        return sync_status_payload()
 
     @app.get("/api/v1/factors")
     def factors() -> dict[str, object]:

@@ -145,7 +145,9 @@ def _alpaca_sip_request_wrapper(now: datetime, request_get: Callable[..., Any] =
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError("alpaca_daily_window_invalid") from exc
         start_utc = datetime.combine(start_day, daytime.min, tzinfo=_NY).astimezone(timezone.utc)
-        end_utc = datetime.combine(end_day, daytime.min, tzinfo=_NY).astimezone(timezone.utc)
+        # make_alpaca_downloader supplies the following date as an exclusive
+        # endpoint; the HTTP API's end is inclusive, so subtract one microsecond.
+        end_utc = datetime.combine(end_day, daytime.min, tzinfo=_NY).astimezone(timezone.utc) - pd.Timedelta(microseconds=1)
         if end_utc > cutoff:
             # The completed day's bar is timestamped at NY midnight. Before
             # the *following* midnight, its exclusive day boundary is still
@@ -266,6 +268,7 @@ def run_recovery(security_master: Path, data_root: Path, *, max_runtime_seconds:
           # Explicitly record the endpoint's latest-data view.  This is not a
           # corporate-action as-of reconstruction and no symbol aliasing occurs.
           record["asof"] = "-"
+          record["request_window_version"] = "inclusive-end-v2"
         summary["attempted"] += 1
         response_received = False
         try:

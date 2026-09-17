@@ -21,7 +21,7 @@ export const navigation: NavGroup[] = [
   { id: 'research', label: '研究工具', icon: FlaskConical, children: [
     { id: 'factor-catalogue', label: '选股指标（因子）', description: '查看已登记指标的定义、公式和可计算状态；不能在此修改公式或直接运行研究。', capabilities: ['指标目录', '公式版本', '适用性说明'], availability: 'ready' },
     { id: 'factor-research', label: '指标检验', description: '对管理员配置的合格固定快照提交指标检验；门禁未通过时不会用演示或不完整数据替代。', capabilities: ['IC 检验', '分组结果', '固定快照'], availability: 'limited', reason: '仅接受合格固定快照，不是正式回测。' },
-    { id: 'datasets', label: '研究股票池', description: '引用和维护历史保存的股票池版本；它仍是旧版引用，未自动关联证券档案。', capabilities: ['股票池引用', '版本记录', '研究用途'], availability: 'limited', reason: '旧版资产池引用尚未与证券档案自动关联。' },
+    { id: 'datasets', label: '研究股票池', description: '搜索自动证券档案并保存固定股票池版本；目录记录保留来源快照，但不自动获得研究资格。', capabilities: ['自动证券引用', '版本记录', '研究用途'], availability: 'limited', reason: '目录身份、行情归属、交易规则与合格研究快照仍须独立核验。' },
     { id: 'experiments', label: '研究记录', description: '查看服务端已发布的研究记录及其参数、数据和代码版本；当前为记录查看，不创建新实验。', capabilities: ['实验记录', '版本追溯', '产物索引'], availability: 'ready' },
   ] },
   { id: 'strategies', label: '策略配置', icon: ChartCandlestick, children: [

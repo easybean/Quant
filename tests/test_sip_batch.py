@@ -49,7 +49,7 @@ def test_groups_exact_windows_and_exposes_cached_symbol_frames(monkeypatch):
     assert downloader.batch_request_count == 1 and downloader.single_request_count == 0
     params = calls[0][1]["params"]
     assert params == {"symbols": "AAA,BBB", "timeframe": "1Day", "feed": "sip", "adjustment": "raw", "asof": "-",
-                      "start": "2024-01-02T05:00:00Z", "end": "2024-01-10T05:00:00Z", "limit": 10000, "sort": "asc"}
+                      "start": "2024-01-02T05:00:00Z", "end": "2024-01-10T04:59:59.999999Z", "limit": 10000, "sort": "asc"}
 
 
 def test_dst_window_uses_new_york_midnight(monkeypatch):
@@ -60,7 +60,24 @@ def test_dst_window_uses_new_york_midnight(monkeypatch):
         request_get=lambda *a, **k: calls.append(k) or Response(payload={"bars": {"AAA": [{"t": "x"}]}}), sleep=lambda _: None)
     downloader("AAA", date(2024, 3, 10), date(2024, 3, 11))
     assert calls[0]["params"]["start"] == "2024-03-10T05:00:00Z"
-    assert calls[0]["params"]["end"] == "2024-03-12T04:00:00Z"
+    assert calls[0]["params"]["end"] == "2024-03-12T03:59:59.999999Z"
+
+
+def test_inclusive_provider_excludes_following_session(monkeypatch):
+    """Simulate inclusive timestamp selection, then retain strict validation."""
+    from quant_data.daily_sync import _validate_normalized
+    from quant_data.pipeline import normalize_bars
+    import pandas as pd
+    monkeypatch.setattr("quant_data.sip_batch.load_alpaca_credentials", lambda _: ("key", "secret"))
+    rows = [{"t": t, "o": 10, "h": 11, "l": 9, "c": 10, "v": 5}
+            for t in ("2024-01-09T05:00:00Z", "2024-01-10T05:00:00Z")]
+    def get(*_args, **kwargs):
+        end = pd.Timestamp(kwargs["params"]["end"])
+        return Response(payload={"bars": {"AAA": [r for r in rows if pd.Timestamp(r["t"]) <= end]}})
+    downloader = make_sip_batch_downloader(_tasks("AAA"), None, NOW, request_get=get)
+    frame = normalize_bars(downloader("AAA", date(2024, 1, 2), date(2024, 1, 9)), "AAA", "alpaca_stock_historical_v2", "raw")
+    _validate_normalized(frame, date(2024, 1, 2), date(2024, 1, 9))
+    assert len(frame) == 1
 
 
 def test_completed_target_uses_delayed_cutoff_and_batch_sends_are_throttled(monkeypatch):

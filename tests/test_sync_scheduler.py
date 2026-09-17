@@ -52,6 +52,20 @@ def test_never_attempted_and_cold_symbols_have_durable_tasks(tmp_path):
     assert (tmp_path / "manifests/us-daily-sync/queue.json").exists()
 
 
+def test_boundary_fix_retries_only_old_window_errors_with_bounded_new_budget(tmp_path):
+    records = tmp_path / "records.jsonl"
+    plan = {"target_date": "2026-09-16", "tasks": [{"task_id": "AAA", "symbol": "AAA", "latest_date": None}]}
+    old = {"source_attempted_at": "AAA", "namespace": "alpaca-sip-recovery-v1", "error_code": "response_date_outside_requested_window", "attempted_at": "2026-09-16T00:00:00+00:00", "status": "failed"}
+    records.write_text("\n".join(json.dumps(old) for _ in range(3)))
+    assert len(due_tasks(plan, records, NOW)) == 1
+    fixed = {**old, "request_window_version": "inclusive-end-v2"}
+    records.write_text("\n".join(json.dumps(r) for r in [old] * 3 + [fixed] * 3))
+    assert due_tasks(plan, records, NOW) == []
+    other = {**old, "error_code": "http_403"}
+    records.write_text("\n".join(json.dumps(other) for _ in range(3)))
+    assert due_tasks(plan, records, NOW) == []
+
+
 def test_due_journal_cooldown_fairness_and_three_attempt_cap(tmp_path):
     tasks = [{"task_id": s, "symbol": s, "latest_date": "2026-08-31"} for s in ("AAA", "BBB", "CCC")]
     plan = {"tasks": tasks, "target_date": "2026-09-16"}

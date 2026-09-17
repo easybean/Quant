@@ -31,7 +31,7 @@ export default function App() {
   const toggleGroup = (id: string) => {
     const target = findNavGroup(id)
     setCollapsed(false)
-    navigate(target.children[0].id)
+    navigate((target.children.find(item => item.availability !== 'planned') || target.children[0]).id)
   }
   let content
   if (activeId === 'workbench') content = <Dashboard />

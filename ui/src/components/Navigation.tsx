@@ -1,4 +1,5 @@
 import { ChevronDown, ChevronLeft, ChevronRight, X } from 'lucide-react'
+import { useState } from 'react'
 import { navigation } from '../navigation'
 
 type NavigationProps = {
@@ -13,6 +14,7 @@ type NavigationProps = {
 }
 
 export function Navigation({ activeId, expandedGroupId, collapsed, mobileOpen, onNavigate, onToggleGroup, onToggleCollapsed, onCloseMobile }: NavigationProps) {
+  const [showPlanned, setShowPlanned] = useState(false)
   return (
     <>
       {mobileOpen && <button className="nav-scrim" type="button" aria-label="关闭导航" onClick={onCloseMobile} />}
@@ -23,7 +25,10 @@ export function Navigation({ activeId, expandedGroupId, collapsed, mobileOpen, o
           <button type="button" className="close-mobile icon-button" onClick={onCloseMobile} aria-label="关闭导航"><X size={18} /></button>
         </div>
         <nav className="primary-nav" aria-label="主导航">
+          {!collapsed && <label className="nav-planned-toggle"><input type="checkbox" checked={showPlanned} onChange={event => setShowPlanned(event.target.checked)}/>显示后续功能（待开发）</label>}
           {navigation.map((group) => {
+            const children = group.children.filter(child => showPlanned || child.availability !== 'planned' || child.id === activeId)
+            if (!children.length) return null
             const isExpanded = expandedGroupId === group.id
             const groupActive = group.children.some((child) => child.id === activeId)
             const Icon = group.icon
@@ -40,7 +45,7 @@ export function Navigation({ activeId, expandedGroupId, collapsed, mobileOpen, o
                   {!collapsed && <><span>{group.label}</span><ChevronDown size={15} className={isExpanded ? 'chevron-open' : ''} /></>}
                 </button>
                 {!collapsed && isExpanded && <div className="secondary-nav">
-                  {group.children.map((child) => (
+                  {children.map((child) => (
                     <button
                       className={`nav-child ${activeId === child.id ? 'is-active' : ''}`}
                       key={child.id}

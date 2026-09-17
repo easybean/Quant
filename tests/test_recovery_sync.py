@@ -163,8 +163,8 @@ def test_alpaca_sip_wrapper_sets_asof_and_ny_utc_boundaries_in_winter_and_dst():
     winter("url", params={"start": "2024-01-02T00:00:00Z", "end": "2024-01-03T00:00:00Z"}, headers={}, timeout=45)
     summer = _alpaca_sip_request_wrapper(datetime(2024, 7, 5, 12, tzinfo=timezone.utc), request_get)
     summer("url", params={"start": "2024-07-02T00:00:00Z", "end": "2024-07-03T00:00:00Z"}, headers={}, timeout=45)
-    assert calls[0]["params"] == {"start": "2024-01-02T05:00:00Z", "end": "2024-01-03T05:00:00Z", "asof": "-"}
-    assert calls[1]["params"] == {"start": "2024-07-02T04:00:00Z", "end": "2024-07-03T04:00:00Z", "asof": "-"}
+    assert calls[0]["params"] == {"start": "2024-01-02T05:00:00Z", "end": "2024-01-03T04:59:59.999999Z", "asof": "-"}
+    assert calls[1]["params"] == {"start": "2024-07-02T04:00:00Z", "end": "2024-07-03T03:59:59.999999Z", "asof": "-"}
     assert calls[0]["timeout"] == calls[1]["timeout"] == 30.0
 
 

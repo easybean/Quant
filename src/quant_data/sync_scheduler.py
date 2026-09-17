@@ -149,6 +149,10 @@ def due_tasks(plan: dict, records: Path, now: datetime) -> list[dict]:
         for line in records.open():
             try:
                 row = json.loads(line); marker = row.get("source_attempted_at")
+                # Only the known pre-fix SIP boundary error gets a fresh,
+                # bounded retry budget. Preserve its journal for auditing.
+                if row.get("namespace") == "alpaca-sip-recovery-v1" and row.get("error_code") == "response_date_outside_requested_window" and row.get("request_window_version") != "inclusive-end-v2":
+                    continue
                 if marker:
                     attempts.setdefault(marker, []).append(row)
             except (ValueError, TypeError): continue

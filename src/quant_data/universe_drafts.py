@@ -17,9 +17,10 @@ from uuid import uuid4
 
 from .instruments import InstrumentDefinition, InstrumentRule, SymbolAssignment, validate_instrument_set
 from .jobs import state_dir
+from .security_catalog import SecurityCatalogueInputError, SecurityCatalogueStore
 
 INSTRUMENT_DRAFT_SCHEMA_VERSION = "p2-06a-instrument-v1"
-ASSET_POOL_DRAFT_SCHEMA_VERSION = "p2-06a-asset-pool-v1"
+ASSET_POOL_DRAFT_SCHEMA_VERSION = "p2-06b-asset-pool-v1"
 
 
 class UniverseDraftInputError(ValueError):
@@ -85,14 +86,15 @@ class InstrumentDraftStore:
 
 
 class AssetPoolDraftStore:
-    def __init__(self, root: str | Path | None = None, instruments: InstrumentDraftStore | None = None) -> None:
+    def __init__(self, root: str | Path | None = None, instruments: InstrumentDraftStore | None = None, security_catalogue: SecurityCatalogueStore | None = None) -> None:
         self.root = state_dir(root)
         self.db_path = self.root / "asset-pool-drafts.sqlite3"
         self.instruments = instruments or InstrumentDraftStore(self.root)
+        self.security_catalogue = security_catalogue or SecurityCatalogueStore(self.root)
         self._lock = threading.Lock()
 
     def initialize(self) -> None:
-        self.root.mkdir(parents=True, exist_ok=True); self.instruments.initialize()
+        self.root.mkdir(parents=True, exist_ok=True); self.instruments.initialize(); self.security_catalogue.initialize()
         with self._connect() as db:
             db.executescript("""
             CREATE TABLE IF NOT EXISTS asset_pool_drafts (
@@ -109,7 +111,7 @@ class AssetPoolDraftStore:
             """)
 
     def save(self, payload: Mapping[str, Any], draft_id: str | None = None) -> dict[str, Any]:
-        name, purpose, instruments = _parse_asset_pool(payload, self.instruments)
+        name, purpose, instruments = _parse_asset_pool(payload, self.instruments, self.security_catalogue)
         now, encoded = _now(), json.dumps(instruments, sort_keys=True, separators=(",", ":"))
         with self._lock, self._connect() as db:
             if draft_id:
@@ -155,19 +157,32 @@ def _parse_instrument_draft(payload: Mapping[str, Any]) -> tuple[str, dict[str, 
     if not isinstance(payload, Mapping) or set(payload) != {"name", "instrument"}: raise UniverseDraftInputError("only name and instrument are accepted")
     return _name(payload.get("name")), _instrument(payload.get("instrument"))[0]
 
-def _parse_asset_pool(payload: Mapping[str, Any], store: InstrumentDraftStore) -> tuple[str, str, list[dict[str, Any]]]:
+def _parse_asset_pool(payload: Mapping[str, Any], store: InstrumentDraftStore, catalogue: SecurityCatalogueStore) -> tuple[str, str, list[dict[str, Any]]]:
     if not isinstance(payload, Mapping) or set(payload) != {"name", "purpose", "instruments"}: raise UniverseDraftInputError("only name, purpose and instruments are accepted")
     name, purpose, raw = _name(payload.get("name")), _purpose(payload.get("purpose")), payload.get("instruments")
-    if not isinstance(raw, list) or not raw or len(raw) > 200: raise UniverseDraftInputError("instruments must contain 1-200 saved instrument references")
-    refs: list[dict[str, Any]] = []; seen: set[str] = set()
+    if not isinstance(raw, list) or not raw or len(raw) > 200: raise UniverseDraftInputError("instruments must contain 1-200 saved instrument or catalogue references")
+    refs: list[dict[str, Any]] = []; seen: set[tuple[str, str]] = set()
     for index, ref in enumerate(raw):
-        if not isinstance(ref, Mapping) or set(ref) != {"instrument_draft_id", "instrument_version"}: raise UniverseDraftInputError(f"instruments[{index}] must contain only instrument_draft_id and instrument_version")
-        draft_id, version = ref.get("instrument_draft_id"), ref.get("instrument_version")
-        if not isinstance(draft_id, str) or not draft_id.strip() or isinstance(version, bool) or not isinstance(version, int) or version < 1: raise UniverseDraftInputError(f"instruments[{index}] has an invalid saved instrument reference")
-        draft_id = draft_id.strip()
-        if draft_id in seen: raise UniverseDraftInputError("duplicate instrument references are not allowed")
-        if not store.version_exists(draft_id, version): raise UniverseDraftInputError(f"instruments[{index}] references an unknown instrument draft or version")
-        seen.add(draft_id); refs.append({"instrument_draft_id": draft_id, "instrument_version": version})
+        if not isinstance(ref, Mapping): raise UniverseDraftInputError(f"instruments[{index}] must be a saved instrument or catalogue reference")
+        if set(ref) == {"instrument_draft_id", "instrument_version"}:
+            draft_id, version = ref.get("instrument_draft_id"), ref.get("instrument_version")
+            if not isinstance(draft_id, str) or not draft_id.strip() or isinstance(version, bool) or not isinstance(version, int) or version < 1: raise UniverseDraftInputError(f"instruments[{index}] has an invalid saved instrument reference")
+            draft_id = draft_id.strip(); key = ("instrument_draft", draft_id)
+            if key in seen: raise UniverseDraftInputError("duplicate instrument or catalogue references are not allowed")
+            if not store.version_exists(draft_id, version): raise UniverseDraftInputError(f"instruments[{index}] references an unknown instrument draft or version")
+            seen.add(key); refs.append({"instrument_draft_id": draft_id, "instrument_version": version})
+            continue
+        if set(ref) != {"member_type", "catalog_id", "source_checksum"} or ref.get("member_type") != "security_catalogue_v1":
+            raise UniverseDraftInputError(f"instruments[{index}] must contain a saved instrument reference or security_catalogue_v1 manifest reference")
+        catalog_id, checksum = ref.get("catalog_id"), ref.get("source_checksum")
+        if not isinstance(catalog_id, str) or not catalog_id.strip(): raise UniverseDraftInputError(f"instruments[{index}] has an invalid catalogue record id")
+        key = ("security_catalogue", catalog_id.strip())
+        if key in seen: raise UniverseDraftInputError("duplicate instrument or catalogue references are not allowed")
+        try:
+            resolved = catalogue.snapshot_reference(catalog_id.strip(), checksum)
+        except SecurityCatalogueInputError as exc:
+            raise UniverseDraftInputError(f"instruments[{index}] {exc}") from exc
+        seen.add(key); refs.append(resolved)
     return name, purpose, refs
 
 def _instrument(raw: Any) -> tuple[dict[str, Any], InstrumentDefinition]:
@@ -224,6 +239,6 @@ def _public_instrument(row: sqlite3.Row, history: bool = False) -> dict[str, Any
     if not history: result["updated_at"] = row["updated_at"]
     return result
 def _public_pool(row: sqlite3.Row, history: bool = False) -> dict[str, Any]:
-    refs = json.loads(row["instruments_json"]); result = {"id": row["id"], "draft_id": row["draft_id"] if history else row["id"], "name": row["name"], "purpose": row["purpose"], "instruments": refs, "instrument_count": len(refs), "created_at": row["created_at"], "version": row["version"], "schema_version": ASSET_POOL_DRAFT_SCHEMA_VERSION}
+    refs = json.loads(row["instruments_json"]); result = {"id": row["id"], "draft_id": row["draft_id"] if history else row["id"], "name": row["name"], "purpose": row["purpose"], "instruments": refs, "instrument_count": len(refs), "legacy_instrument_count": sum(1 for ref in refs if "instrument_draft_id" in ref), "catalogue_member_count": sum(1 for ref in refs if ref.get("member_type") == "security_catalogue_v1"), "research_qualified": False, "created_at": row["created_at"], "version": row["version"], "schema_version": ASSET_POOL_DRAFT_SCHEMA_VERSION}
     if not history: result["updated_at"] = row["updated_at"]
     return result
