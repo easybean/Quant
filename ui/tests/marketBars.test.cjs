@@ -1,0 +1,9 @@
+const {test}=require('node:test');const assert=require('node:assert/strict');const fs=require('node:fs');const vm=require('node:vm');const ts=require('typescript');const exportsValue={};
+vm.runInNewContext(ts.transpileModule(fs.readFileSync(require.resolve('../src/marketBars.ts'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{exports:exportsValue});
+const {aggregateBars}=exportsValue;
+const bar=(date,open,high,low,close,volume=10)=>({date,open,high,low,close,volume,source:'test',adjustment_status:'raw'});
+test('daily preserves every historical row',()=>{const rows=[bar('2000-01-03',1,2,1,2),bar('2026-09-15',2,3,1,2)];assert.equal(aggregateBars(rows,'daily'),rows)});
+test('weeks use Monday boundary and first open last close extrema and summed volume',()=>{const rows=[bar('2026-09-14',9,12,8,11),bar('2026-09-11',5,8,4,7),bar('2026-09-07',3,6,2,5)];const result=aggregateBars(rows,'weekly');assert.equal(result.length,2);assert.deepEqual(JSON.parse(JSON.stringify(result[0])),bar('2026-09-07',3,8,2,7,20))});
+test('calendar months and year boundary remain separate',()=>{const result=aggregateBars([bar('2025-12-31',2,4,1,3),bar('2026-01-02',3,5,2,4),bar('2026-01-30',4,7,3,6)],'monthly');assert.equal(result.length,2);assert.equal(result[1].close,6);assert.equal(result[1].volume,20)});
+test('missing OHLC or volume is not fabricated and provenance retained',()=>{const missing={...bar('2026-09-08',2,3,1,2,null),open:null,source:'other'};const result=aggregateBars([bar('2026-09-07',1,3,1,2),missing],'weekly')[0];assert.equal(result.open,null);assert.equal(result.high,null);assert.equal(result.volume,null);assert.equal(result.source,'test / other')});
+test('empty history stays empty',()=>assert.equal(aggregateBars([],'monthly').length,0));

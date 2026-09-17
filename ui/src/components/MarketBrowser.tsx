@@ -3,16 +3,14 @@ import { AlertCircle, BarChart3, LoaderCircle, Search, ShieldAlert } from 'lucid
 import { CandlestickSeries, ColorType, CrosshairMode, HistogramSeries, createChart, type CandlestickData, type Time } from 'lightweight-charts'
 import { fetchDailyBars, searchDailySeries, type DailyBar, type DailyBarsResponse, type DailySeries } from '../api'
 
-type HistoryPeriod = 'month' | 'quarter' | 'year' | 'all'
-const periods: [HistoryPeriod, string][] = [['month', '1个月'], ['quarter', '3个月'], ['year', '1年'], ['all', '全部']]
+import { aggregateBars, intervalLabels, type CandleInterval } from '../marketBars'
 
-async function fetchHistory(series: DailySeries, period: HistoryPeriod): Promise<DailyBarsResponse> {
+async function fetchHistory(series: DailySeries): Promise<DailyBarsResponse> {
   const last = Date.parse(series.last_date)
   const first = Date.parse(series.first_date)
   if (!Number.isFinite(first) || !Number.isFinite(last) || first > last) throw new Error('该来源的行情覆盖日期无效')
   const day = 86400000
-  const span = period === 'month' ? 30 : period === 'quarter' ? 90 : 365
-  const start = period === 'all' ? first : Math.max(first, last - span * day)
+  const start = first
   const bars: DailyBar[] = []
   const sources = new Set<string>()
   const adjustments = new Set<string>()
@@ -33,7 +31,7 @@ export function MarketBrowser() {
   const [query, setQuery] = useState('SPY')
   const [items, setItems] = useState<DailySeries[]>([])
   const [selected, setSelected] = useState<DailySeries | null>(null)
-  const [period, setPeriod] = useState<HistoryPeriod>('year')
+  const [interval, setInterval] = useState<CandleInterval>('daily')
   const [data, setData] = useState<DailyBarsResponse | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -47,31 +45,31 @@ export function MarketBrowser() {
     try {
       const found = await searchDailySeries(value, new AbortController().signal)
       setItems(found); setSelected(found[0] ?? null)
-      if (found[0]) setData(await fetchHistory(found[0], period))
+      if (found[0]) setData(await fetchHistory(found[0]))
     } catch (reason) { setError(reason instanceof Error ? reason.message : '行情浏览暂不可用') }
     finally { setLoading(false) }
   }
-  async function loadSeries(series: DailySeries, nextPeriod: HistoryPeriod = period) {
+  async function loadSeries(series: DailySeries) {
     if (loading) return
     setSelected(series); setLoading(true); setError(''); setData(null)
-    try { setData(await fetchHistory(series, nextPeriod)) }
+    try { setData(await fetchHistory(series)) }
     catch (reason) { setError(reason instanceof Error ? reason.message : '原始日线暂不可用') }
     finally { setLoading(false) }
   }
-  async function changePeriod(nextPeriod: HistoryPeriod) { setPeriod(nextPeriod); if (selected) await loadSeries(selected, nextPeriod) }
-  const title = useMemo(() => data ? `${data.series.symbol} · 日线行情` : '选择一只股票', [data])
+  const chartBars = useMemo(() => aggregateBars(data?.bars ?? [], interval), [data, interval])
+  const title = useMemo(() => data ? `${data.series.symbol} · ${intervalLabels[interval]}行情` : '选择一只股票', [data, interval])
 
   return <div className="market-browser-page">
-    <section className="page-heading"><div><p className="eyebrow">市场与数据 · 日线行情</p><h1>行情浏览</h1><p>同一只股票统一展示历史行情与每日更新；原始来源保留。浏览行情不代表复权、总回报或回测数据已验证。</p></div><span className="static-boundary">只读 · 行情浏览</span></section>
-    <section className="quote-controls" aria-label="日线搜索与显示周期">
+    <section className="page-heading"><div><p className="eyebrow">市场与数据 · 股票行情</p><h1>行情浏览</h1><p>同一只股票统一展示历史行情与每日更新；原始来源保留。浏览行情不代表复权、总回报或回测数据已验证。</p></div><span className="static-boundary">只读 · 行情浏览</span></section>
+    <section className="quote-controls" aria-label="行情搜索与K线类型">
       <label><Search size={16}/><span className="required-mark" aria-hidden="true">*</span><input required value={query} onChange={event => setQuery(event.target.value.toUpperCase())} maxLength={32} placeholder="输入证券代码，如 SPY" aria-label="搜索证券代码（必填）" onKeyDown={event => { if (event.key === 'Enter') void search() }} /></label>
-      <label>显示周期<select value={period} disabled={loading} onChange={event => void changePeriod(event.target.value as HistoryPeriod)}>{periods.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-      <button type="button" className="quote-primary" disabled={loading} onClick={() => void search()}>{loading ? '读取中…' : '搜索日线'}</button>
+      <label>K线类型<select aria-label="K线类型" value={interval} onChange={event => setInterval(event.target.value as CandleInterval)}>{Object.entries(intervalLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+      <button type="button" className="quote-primary" disabled={loading} onClick={() => void search()}>{loading ? '读取中…' : '搜索行情'}</button>
       {selected ? <button type="button" className="quote-secondary" disabled={loading} onClick={() => void search()}>刷新行情</button> : null}
     </section>
     {error ? <section className="empty-state wide"><AlertCircle size={23}/><strong>无法读取日线</strong><p>{error}</p></section> : loading ? <section className="empty-state wide"><LoaderCircle size={23} className="animate-spin"/><strong>正在读取行情</strong><p>自动读取这只股票的最新行情；全部历史分段加载。</p></section> : <section className="quote-grid">
       <aside className="quote-series"><header><strong>搜索结果</strong><span>{items.length} 只股票</span></header>{items.length ? items.map(item => <button type="button" key={item.series_id} className={selected?.series_id === item.series_id ? 'is-active' : ''} onClick={() => void loadSeries(item)}><strong>{item.symbol}</strong><span>日线行情</span><small>{item.first_date} — {item.last_date}</small></button>) : <p>{searched ? '没有匹配的已索引股票。' : '输入股票代码后搜索。'}</p>}</aside>
-      <article className="quote-panel"><header><div><h2>{title}</h2><p>{data ? `${data.returned_rows} 根日线 · ${data.requested_range.start} 至 ${data.requested_range.end}` : '搜索后选择一只股票。'}</p></div><BarChart3 size={18}/></header>{data ? <><CandleChart bars={data.bars}/><div className="quote-meta"><span>数据来源：{data.source.map(sourceName).join('、') || '未记录'}</span><span>口径标记：{data.adjustment_status.join('、') || '未记录'}（未经统一复权验证）</span></div><div className="boundary-callout"><ShieldAlert size={17}/><p>{data.quality_warning} {data.limitations.join(' ')}</p></div></> : <div className="empty-state"><Search size={22}/><strong>尚未选择股票</strong><p>无数据时不会使用演示 K 线替代。</p></div>}</article>
+      <article className="quote-panel"><header><div><h2>{title}</h2><p>{data ? `${chartBars.length} 根${intervalLabels[interval]} · ${data.requested_range.start} 至 ${data.requested_range.end}` : '搜索后选择一只股票。'}</p></div><BarChart3 size={18}/></header>{data ? <><CandleChart bars={chartBars}/>{interval !== 'daily' ? <p className="quote-attribution">由已有日线按自然周（周一开始）/自然月汇总；首尾周期可能未完整结束，缺失行情不补造，仅供浏览。</p> : null}<div className="quote-meta"><span>数据来源：{data.source.map(sourceName).join('、') || '未记录'}</span><span>口径标记：{data.adjustment_status.join('、') || '未记录'}（未经统一复权验证）</span></div><div className="boundary-callout"><ShieldAlert size={17}/><p>{data.quality_warning} {data.limitations.join(' ')}</p></div></> : <div className="empty-state"><Search size={22}/><strong>尚未选择股票</strong><p>无数据时不会使用演示 K 线替代。</p></div>}</article>
     </section>}
   </div>
 }
@@ -115,7 +113,7 @@ function CandleChart({ bars }: { bars: DailyBar[] }) {
 
   if (!bars.length) return <div className="empty-state"><BarChart3 size={22}/><strong>该日期区间没有已记录日线</strong><p>这不等同于停牌或没有交易；请查看来源覆盖范围。</p></div>
   if (!valid.length) return <div className="empty-state"><AlertCircle size={22}/><strong>该区间日线缺少可绘制 OHLC</strong><p>质量问题已保留，系统不会补造价格。</p></div>
-  return <div className="quote-chart-shell"><div className="quote-crosshair" aria-live="polite"><strong>{formatTime(crosshair?.time)}</strong><span>开 {formatNumber(crosshair?.open)}</span><span>高 {formatNumber(crosshair?.high)}</span><span>低 {formatNumber(crosshair?.low)}</span><span>收 {formatNumber(crosshair?.close)}</span><span>量 {formatVolume(volumeForTime(bars, crosshair?.time))}</span><span>来源 {sourceName(bars.find(bar => bar.date === formatTime(crosshair?.time))?.source || '未记录')}</span></div><div ref={hostRef} className="quote-chart" aria-label="可缩放、可平移的日线蜡烛图与成交量"/><p className="quote-attribution">图表基于 <a href="https://www.tradingview.com/lightweight-charts/" target="_blank" rel="noreferrer">TradingView Lightweight Charts™</a>；行情只来自内网只读 API。</p></div>
+  return <div className="quote-chart-shell"><div className="quote-crosshair" aria-live="polite"><strong>{formatTime(crosshair?.time)}</strong><span>开 {formatNumber(crosshair?.open)}</span><span>高 {formatNumber(crosshair?.high)}</span><span>低 {formatNumber(crosshair?.low)}</span><span>收 {formatNumber(crosshair?.close)}</span><span>量 {formatVolume(volumeForTime(bars, crosshair?.time))}</span><span>来源 {sourceName(bars.find(bar => bar.date === formatTime(crosshair?.time))?.source || '未记录')}</span></div><div ref={hostRef} className="quote-chart" aria-label="可缩放、可平移的K线蜡烛图与成交量"/><p className="quote-attribution">图表基于 <a href="https://www.tradingview.com/lightweight-charts/" target="_blank" rel="noreferrer">TradingView Lightweight Charts™</a>；行情只来自内网只读 API。</p></div>
 }
 
 function toCandle(bar: DailyBar | undefined): CandlestickData<Time> | null {
