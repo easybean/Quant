@@ -1,0 +1,16 @@
+{
+  "results": [
+    {
+      "name": "missing_instrument_prerequisite",
+      "status": "passed",
+      "detail": {
+        "save_not_silently_disabled": true,
+        "direct_navigation": true
+      }
+    }
+  ],
+  "jobs": [],
+  "drafts": [],
+  "pageErrors": [],
+  "checked_at": "2026-09-17T10:03:11.397Z"
+}

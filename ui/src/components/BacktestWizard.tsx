@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { idempotencyKey } from '../idempotency'
 import { AlertCircle, CheckCircle2, CircleAlert, LoaderCircle, Play, RefreshCw, ShieldAlert } from 'lucide-react'
 import { BacktestAvailability, Job, fetchBacktestAvailability, fetchJob, submitBacktest } from '../api'
 
@@ -41,6 +42,8 @@ export function BacktestWizard() {
   const [error, setError] = useState('')
   const [attempt, setAttempt] = useState(0)
   const [submitting, setSubmitting] = useState(false)
+  const inFlight = useRef(false)
+  const pendingKey = useRef<{ body: string; key: string } | null>(null)
 
   useEffect(() => {
     const controller = new AbortController()
@@ -75,17 +78,20 @@ export function BacktestWizard() {
   }, [availability, mode, template])
 
   const submit = async () => {
-    if (!availability || mode !== 'synthetic' || !acknowledged || submitting) return
+    if (!availability || mode !== 'synthetic' || !acknowledged || inFlight.current || (job && !terminal.has(job.status))) return
+    inFlight.current = true
     setSubmitting(true); setError(''); setJob(null)
     try {
       const body = syntheticBody(template, availability)
       // One key is retained for this click; retries and accidental double-clicks
       // resolve to the same durable job rather than enqueueing another run.
-      const key = `backtest-${crypto.randomUUID()}`
-      setJob(await submitBacktest(body, key))
+      const encoded = JSON.stringify(body)
+      if (!pendingKey.current || pendingKey.current.body !== encoded) pendingKey.current = { body: encoded, key: idempotencyKey('backtest') }
+      setJob(await submitBacktest(body, pendingKey.current.key))
+      pendingKey.current = null
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '回测提交失败')
-    } finally { setSubmitting(false) }
+    } finally { inFlight.current = false; setSubmitting(false) }
   }
 
   return <div className="backtest-wizard">

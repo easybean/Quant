@@ -42,7 +42,7 @@ export default function App() {
   else if (activeId === 'strategy-templates') content = <StrategyWorkspace />
   else if (activeId === 'my-strategies' || activeId === 'strategy-details') content = <VisualStrategyWorkspace onNavigate={navigate} />
   else if (activeId === 'instruments') content = <InstrumentWorkspace />
-  else if (activeId === 'datasets') content = <AssetPoolWorkspace />
+  else if (activeId === 'datasets') content = <AssetPoolWorkspace onNavigate={navigate} />
   else if (activeId === 'risk-rules') content = <RiskPolicyWorkspace />
   else if (activeId === 'connections') content = <DataSourceWorkspace />
   else if (activeId === 'paper-accounts' || activeId === 'orders-fills' || activeId === 'cash-ledger') content = <PaperAccountWorkspace />

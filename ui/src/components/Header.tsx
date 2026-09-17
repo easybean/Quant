@@ -20,7 +20,7 @@ export function Header({ group, child, theme, onToggleTheme, onOpenMenu }: Heade
       <div className="topbar-actions">
         <label className="global-search"><Search size={16} /><input type="search" placeholder="搜索功能、因子或资产" aria-label="全局搜索（仅界面原型）" /></label>
         <span className="environment-badge">模拟环境</span>
-        <span className="data-status"><i aria-hidden="true" /> 数据接口未接入</span>
+        <span className="data-status"><i aria-hidden="true" /> 接口状态见工作台</span>
         <ThemeToggle theme={theme} onToggle={onToggleTheme} />
         <button className="icon-button notification-button" type="button" aria-label="通知（当前没有新通知）"><Bell size={18} /><span /></button>
       </div>

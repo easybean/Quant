@@ -1,5 +1,6 @@
 import { AlertCircle, FlaskConical, LoaderCircle, Play, RefreshCw } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
+import { idempotencyKey } from '../idempotency'
 import { Factor, FactorResearchAvailability, Job, fetchFactorCatalogue, fetchFactorResearchAvailability, fetchFactorResult, fetchJob, submitFactorResearch } from '../api'
 
 export function FactorResearch() {
@@ -10,7 +11,7 @@ export function FactorResearch() {
   useEffect(load, [])
   useEffect(() => { if (!job || ['succeeded', 'failed', 'cancelled'].includes(job.status)) return; const timer = window.setInterval(() => fetchJob(job.id, new AbortController().signal).then(setJob).catch(reason => setError(reason.message)), 1500); return () => window.clearInterval(timer) }, [job])
   useEffect(() => { if (job?.status !== 'succeeded') return; fetchFactorResult(job.id, new AbortController().signal).then(setResult).catch(reason => setError(reason.message)) }, [job?.status])
-  const submit = async () => { if (!gate?.available || !factorId || !snapshot) return; setError(''); setResult(null); try { const key = `factor-${crypto.randomUUID()}`; setJob(await submitFactorResearch({ kind: 'research', operation: 'factor_evaluation', strategy: { template: 'single_factor_evaluation-v1' }, parameters: { factor_id: factorId, symbols: [], holding_period: 5, quantiles: 5, min_cross_section: 5 }, data_snapshot: snapshot, code_version: 'ui-submission-v1' }, key)) } catch (reason) { setError(reason instanceof Error ? reason.message : '提交失败') } }
+  const submit = async () => { if (!gate?.available || !factorId || !snapshot) return; setError(''); setResult(null); try { const key = idempotencyKey('factor'); setJob(await submitFactorResearch({ kind: 'research', operation: 'factor_evaluation', strategy: { template: 'single_factor_evaluation-v1' }, parameters: { factor_id: factorId, symbols: [], holding_period: 5, quantiles: 5, min_cross_section: 5 }, data_snapshot: snapshot, code_version: 'ui-submission-v1' }, key)) } catch (reason) { setError(reason instanceof Error ? reason.message : '提交失败') } }
   const summary = result?.result as { metrics?: Record<string, unknown>; coverage?: Array<{ 指标: string; 数值: unknown }>; diagnostics?: { limitations?: string[] } } | undefined
   return <div className="factor-research"><section className="page-heading"><div><p className="eyebrow">研究实验室 · 异步因子检验</p><h1>因子研究</h1><p>仅使用服务器登记的固定快照。IC、分组收益和换手是研究统计，不是可执行策略收益。</p></div></section>
     {error && <section className="empty-state wide"><AlertCircle size={24}/><strong>无法继续研究</strong><p>{error}</p><button className="detail-action" onClick={load}><RefreshCw size={15}/>重新读取</button></section>}

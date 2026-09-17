@@ -68,7 +68,7 @@ function DashboardContent({ snapshot }: { snapshot: DashboardSnapshot }) {
       </article>
     </section>
     <section className="panel experiments-panel">
-      <div className="panel-heading"><div><h2>近期实验</h2><p>尚未建立实验记录库，因此不显示占位策略或虚构运行记录。</p></div><span className="static-boundary">暂无记录</span></div>
+      <div className="panel-heading"><div><h2>近期实验</h2><p>此处尚未接入实验汇总；已发布记录请前往“研究实验室 → 实验记录”。不显示虚构收益。</p></div><span className="static-boundary">汇总未接入</span></div>
       <EmptyPanel title="暂无已发布实验" message="完成可复现实验并生成结果快照后，才会在这里显示参数、数据范围、时间和指标。" compact />
     </section>
   </>

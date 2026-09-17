@@ -1,0 +1,123 @@
+{
+  "results": [
+    {
+      "name": "http_backtest",
+      "status": "passed",
+      "detail": {
+        "HTTP": true,
+        "double_click_one_request": true,
+        "uncertain_retry_same_key": true,
+        "job": "40135fbd-b263-4188-8643-76d45a26a25b"
+      }
+    },
+    {
+      "name": "instrument-drafts",
+      "status": "passed",
+      "detail": {
+        "required": true,
+        "field_errors": true,
+        "focus": true,
+        "id": "de4d4df7-d027-46e0-9b7c-05e73dd78539",
+        "version": 2
+      }
+    },
+    {
+      "name": "asset-pool-drafts",
+      "status": "passed",
+      "detail": {
+        "required": true,
+        "field_errors": true,
+        "focus": true,
+        "id": "17327e9a-f97f-4c54-828b-0cb41384eb7d",
+        "version": 2
+      }
+    },
+    {
+      "name": "strategy-drafts",
+      "status": "passed",
+      "detail": {
+        "required": true,
+        "field_errors": true,
+        "focus": true,
+        "id": "521a355d-e58e-405c-ba2a-1d48cc070cfa",
+        "version": 2
+      }
+    },
+    {
+      "name": "risk-policy-drafts",
+      "status": "passed",
+      "detail": {
+        "required": true,
+        "field_errors": true,
+        "focus": true,
+        "id": "dfddb2b9-ee18-4722-8cad-eb24b9d98fba",
+        "version": 2
+      }
+    },
+    {
+      "name": "data-source-drafts",
+      "status": "passed",
+      "detail": {
+        "required": true,
+        "field_errors": true,
+        "focus": true,
+        "id": "31cd6795-2a09-4fbe-86f4-b8bc2bfd868a",
+        "version": 2
+      }
+    },
+    {
+      "name": "paper-accounts",
+      "status": "passed",
+      "detail": {
+        "required": true,
+        "field_errors": true,
+        "focus": true,
+        "id": "1f342bc7-314e-41e7-baa8-b0553f7483ca",
+        "version": null
+      }
+    },
+    {
+      "name": "missing_instrument_prerequisite",
+      "status": "failed",
+      "error": "locator.click: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByRole('button', { name: /创建标的/ })\u001b[22m\n"
+    },
+    {
+      "name": "server_field_error",
+      "status": "passed",
+      "detail": {
+        "server422_mapped": true
+      }
+    }
+  ],
+  "jobs": [
+    "40135fbd-b263-4188-8643-76d45a26a25b"
+  ],
+  "drafts": [
+    {
+      "route": "instrument-drafts",
+      "id": "de4d4df7-d027-46e0-9b7c-05e73dd78539"
+    },
+    {
+      "route": "asset-pool-drafts",
+      "id": "17327e9a-f97f-4c54-828b-0cb41384eb7d"
+    },
+    {
+      "route": "strategy-drafts",
+      "id": "521a355d-e58e-405c-ba2a-1d48cc070cfa"
+    },
+    {
+      "route": "risk-policy-drafts",
+      "id": "dfddb2b9-ee18-4722-8cad-eb24b9d98fba"
+    },
+    {
+      "route": "data-source-drafts",
+      "id": "31cd6795-2a09-4fbe-86f4-b8bc2bfd868a"
+    },
+    {
+      "route": "paper-accounts",
+      "id": "1f342bc7-314e-41e7-baa8-b0553f7483ca"
+    }
+  ],
+  "pageErrors": [],
+  "checked_at": "2026-09-17T10:02:51.130Z"
+}
