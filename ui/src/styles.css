@@ -124,3 +124,10 @@ input[aria-invalid='true'],select[aria-invalid='true'],textarea[aria-invalid='tr
 .quote-intervals button.is-active{color:#fff;background:#0f766e;font-weight:600}
 .quote-intervals button:focus-visible{outline:2px solid #5eead4;outline-offset:2px}
 @media(max-width:480px){.quote-panel>header{flex-wrap:wrap;padding-top:10px;padding-bottom:10px}.quote-intervals{margin-left:auto}.quote-intervals button{min-height:36px}}
+.instrument-advanced{margin:10px 0 18px;padding:14px;border:1px solid #dbe3ec;border-radius:8px;background:#f8fafc}
+.instrument-advanced summary{cursor:pointer;color:#43546a;font-size:.8rem;font-weight:600}
+.instrument-advanced>p{color:#64748b;font-size:.72rem;line-height:1.6}
+.instrument-id-row{display:flex;gap:8px;margin-top:6px;align-items:center}.instrument-id-row input{min-width:0;flex:1;width:100%}.instrument-id-row button{flex-shrink:0}
+.universe-form label>small{display:block;margin-top:6px;line-height:1.6;font-weight:400}
+:root[data-theme='dark'] .instrument-advanced{background:#141e29;border-color:#344557}:root[data-theme='dark'] .instrument-advanced summary{color:#e5edf7}
+@media(max-width:480px){.instrument-id-row{flex-wrap:wrap}.instrument-id-row button{min-height:36px}}
