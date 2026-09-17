@@ -240,11 +240,11 @@ def _is_yahoo(entry: dict[str, Any]) -> bool:
 
 
 def _is_append_source(entry: dict[str, Any]) -> bool:
-    return _is_yahoo(entry) or (entry.get("provider"), entry.get("namespace")) in {("nasdaq", "nasdaq-daily-recovery-v1"), ("yfinance", "yahoo-symbol-recovery-v1"), ("alpaca", "alpaca-sip-recovery-v1")}
+    return _is_yahoo(entry) or (entry.get("provider"), entry.get("namespace")) in {("nasdaq", "nasdaq-daily-recovery-v1"), ("yfinance", "yahoo-symbol-recovery-v1"), ("alpaca", "alpaca-sip-recovery-v1"), ("alpaca", "alpaca-sip-symbol-mapping-recovery-v1")}
 
 
 def _append_priority(entry: dict[str, Any]) -> tuple[int, str]:
-    priorities = {"yahoo-daily-v1": 0, "yahoo-symbol-recovery-v1": 1, "alpaca-sip-recovery-v1": 2, "nasdaq-daily-recovery-v1": 3}
+    priorities = {"yahoo-daily-v1": 0, "yahoo-symbol-recovery-v1": 1, "alpaca-sip-recovery-v1": 2, "alpaca-sip-symbol-mapping-recovery-v1": 3, "nasdaq-daily-recovery-v1": 4}
     return priorities.get(str(entry.get("namespace")), 4), str(entry["series_id"])
 
 

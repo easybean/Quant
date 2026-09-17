@@ -562,6 +562,9 @@ def run_sync(
                         normalized[optional] = pd.NA
                 normalized["actions_status"] = record["actions_status"]
                 normalized["retrieved_at"] = record["retrieved_at"]
+                normalized["available_at"] = record["retrieved_at"]
+                normalized["availability_policy"] = "observed_ingestion_only"
+                record["availability_policy"] = "observed_ingestion_only"
                 _validate_normalized(normalized, request_start, target)
                 phase = "storage"
                 merged = normalized if existing is None else pd.concat([existing, normalized], ignore_index=True)

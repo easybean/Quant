@@ -73,6 +73,28 @@ def test_rejected_ohlcv_does_not_stop_other_symbols(tmp_path):
     assert result["attempted"] == 4 and result["success"] == 1 and not result["circuit_open"]
 
 
+def test_default_mapped_batch_is_called_with_original_contract_key(tmp_path, monkeypatch):
+    master, root = _setup(tmp_path, [], {"symbol": ["ABR$D"], "status": ["active"], "asset_type": ["Stock"]})
+    queue = tmp_path / "queue.json"
+    queue.write_text(json.dumps({"schema_version": "us-daily-gap-queue-v1", "tasks": [{
+        "symbol": "ABR$D", "provider_symbol": "ABR.PRD", "task_id": "mapped",
+        "requested_start": "2024-01-02", "requested_end": "2024-01-09",
+        "symbol_mapping": {"mapping_id": "id", "mapping_version": "v", "provider_asset_id": "uuid",
+                           "historical_identity": "unknown", "research_qualified": False}}]}))
+    monkeypatch.setattr("quant_data.recovery_sync.make_alpaca_downloader", lambda **kwargs: lambda *args: None)
+    class Batch:
+        def __call__(self, symbol, start, end):
+            assert symbol == "ABR$D"
+            return _bars()
+        def close(self):
+            pass
+    monkeypatch.setattr("quant_data.sip_batch.make_sip_batch_downloader", lambda tasks, *args: Batch())
+    result = run_recovery(master, root, now=NOW, gap_queue=queue, recovery_provider="alpaca", request_delay=0)
+    assert result["success"] == 1 and result["failed"] == 0
+    record = json.loads((root / "manifests/alpaca-sip-symbol-mapping-recovery-v1/records.jsonl").read_text())
+    assert record["symbol"] == "ABR$D" and record["provider_symbol"] == "ABR.PRD"
+
+
 def test_deferred_does_not_cancel_failure_and_missing_volume_is_rejected(tmp_path):
     master, root = _setup(tmp_path, [_failure(), {**_failure(), "status": "deferred", "observed_at": "2024-01-11T00:00:00+00:00"}])
     frame = _bars()
@@ -137,6 +159,9 @@ def test_alpaca_uses_independent_namespace_raw_source_and_explicit_asof(tmp_path
     assert record["provider"] == "alpaca" and record["source"] == "alpaca_stock_historical_v2" and record["asof"] == "-"
     saved = pd.read_parquet(root / "bars/daily/provider=alpaca/namespace=alpaca-sip-recovery-v1" / f"symbol={symbol_key('AAA')}" / "bars.parquet")
     assert saved["adjustment_status"].eq("raw").all() and saved["dividends"].isna().all()
+    assert record["availability_policy"] == "observed_ingestion_only"
+    assert saved["available_at"].eq(record["retrieved_at"]).all()
+    assert datetime.fromisoformat(record["retrieved_at"]).tzinfo is not None
     assert not (root / "manifests/nasdaq-daily-recovery-v1/records.jsonl").exists()
 
 

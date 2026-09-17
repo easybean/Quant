@@ -1,0 +1,11 @@
+[Unit]
+Description=Archive official current US listing evidence without changing historical masters
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/davidou/quant/app
+ExecStart=/home/davidou/quant/venv/bin/python -m quant_data.sync_reference_refresh --data-root /home/davidou/quant/data --credential-file /home/davidou/alpacakey
+TimeoutStartSec=240
+UMask=0077

@@ -187,6 +187,8 @@ def test_archives_revision_and_main_exit_codes(tmp_path, monkeypatch):
     stored = pd.read_parquet(current).iloc[0]
     assert stored.close == 99.0 and pd.isna(stored.adj_close) and pd.isna(stored.dividends)
     assert stored.actions_status == "unknown" and stored.retrieved_at
+    assert stored.available_at == stored.retrieved_at
+    assert stored.availability_policy == "observed_ingestion_only"
     monkeypatch.setattr(daily_sync, "run_sync", lambda **_: {"status": "partial"})
     assert daily_sync.main(["--security-master", "x", "--data-root", "x", "--start", "2024-01-01"]) == 2
     monkeypatch.setattr(daily_sync, "run_sync", lambda **_: {"status": "failed"})

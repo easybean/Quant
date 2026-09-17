@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily official current-listing gap evidence refresh (no model calls)
+
+[Timer]
+OnCalendar=*-*-* 07:20:00 Asia/Shanghai
+Persistent=true
+Unit=quant-current-listing-evidence.service
+
+[Install]
+WantedBy=timers.target

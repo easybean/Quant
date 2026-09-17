@@ -52,6 +52,17 @@ def test_groups_exact_windows_and_exposes_cached_symbol_frames(monkeypatch):
                       "start": "2024-01-02T05:00:00Z", "end": "2024-01-10T04:59:59.999999Z", "limit": 10000, "sort": "asc"}
 
 
+def test_mapped_provider_symbol_is_requested_and_returned_under_original_symbol(monkeypatch):
+    tasks = [{"symbol": "ABR$D", "provider_symbol": "ABR.PRD", "requested_start": "2024-01-02", "requested_end": "2024-01-09", "task_id": "mapped"}]
+    downloader, calls = _downloader(monkeypatch, tasks, [Response(payload={"bars": {"ABR.PRD": [
+        {"t": "2024-01-02T05:00:00Z", "o": 1, "h": 2, "l": .5, "c": 1.5, "v": 3}],
+    }, "next_page_token": None})])
+    frame = downloader("ABR$D", date(2024, 1, 2), date(2024, 1, 9))
+    assert len(frame) == 1 and calls[0][1]["params"]["symbols"] == "ABR.PRD"
+    with pytest.raises(ValueError, match="tasks_invalid"):
+        make_sip_batch_downloader(tasks + [{**tasks[0], "symbol": "OTHER"}], None, NOW, request_get=lambda *_a, **_k: Response())
+
+
 def test_dst_window_uses_new_york_midnight(monkeypatch):
     now = datetime(2024, 3, 12, 23, tzinfo=timezone.utc)
     monkeypatch.setattr("quant_data.sip_batch.load_alpaca_credentials", lambda _: ("key", "secret"))

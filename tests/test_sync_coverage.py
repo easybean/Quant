@@ -1,4 +1,5 @@
 import json
+import hashlib
 
 import pandas as pd
 
@@ -7,7 +8,7 @@ from quant_data.sync_coverage import build_sync_coverage
 
 def test_historical_only_is_excluded_and_bridge_gap_is_not_current(tmp_path, monkeypatch):
     from datetime import date
-    monkeypatch.setattr("quant_data.sync_coverage._target_end", lambda _: date(2026, 9, 15))
+    monkeypatch.setattr("quant_data.sync_scheduler.completed_session", lambda _: date(2026, 9, 15))
     manifest = tmp_path / "manifests/yahoo-daily-v1"
     manifest.mkdir(parents=True)
     (manifest / "baselines.json").write_text(json.dumps({"symbols": {"OLD": {"last_date": "2020-01-01"}, "TSLA": {"last_date": "2026-08-31"}}}))
@@ -23,6 +24,12 @@ def test_historical_only_is_excluded_and_bridge_gap_is_not_current(tmp_path, mon
     assert result["historical_only_symbols"] == 1 and result["needs_update"] == 1
     (manifest / "records.jsonl").write_text(json.dumps({"symbol": "TSLA", "status": "success", "requested_start": "2026-09-01"}) + "\n")
     assert build_sync_coverage(tmp_path, master)["endpoint_current"] == 1
+    derived = tmp_path / "reference/acquisition.parquet"
+    derived.parent.mkdir()
+    pd.DataFrame({"symbol": ["OLD", "TSLA", "NEW"], "status": ["delisted", "active", "active"], "asset_type": ["Stock"] * 3}).to_parquet(derived, index=False)
+    (tmp_path / "catalogue/current-acquisition-master-v1.json").write_text(json.dumps({"schema_version": "current-acquisition-master-v1", "relative_path": "reference/acquisition.parquet", "sha256": hashlib.sha256(derived.read_bytes()).hexdigest()}))
+    result = build_sync_coverage(tmp_path, master)
+    assert result["active_symbols"] == 2 and result["needs_update"] == 1
     alpaca_manifest = tmp_path / "manifests/alpaca-sip-recovery-v1"
     alpaca_manifest.mkdir(parents=True)
     (alpaca_manifest / "records.jsonl").write_text(json.dumps({"symbol": "TSLA", "status": "success", "requested_start": "2026-09-01"}) + "\n")

@@ -49,14 +49,35 @@ def sync_status_payload(data_root: str | Path | None = None) -> dict:
             raise ValueError("invalid_providers")
         response.update({"run_available": True, "run_status": _text(latest.get("status")),
                          "finished_at": _text(latest.get("finished_at")), "run_target_date": _text(latest.get("target_date"))})
-        for name in ("alpaca", "yahoo", "nasdaq"):
+        for name in ("alpaca-mapped", "alpaca", "yahoo", "nasdaq"):
             row = providers.get(name)
             if not isinstance(row, dict):
                 continue
+            if all(row.get(key) is None for key in ("success", "failed", "attempted")) and row.get("status") == "failed" and row.get("error_type"):
+                response["providers"].append({"provider": name, "status": "failed", "counts_available": False,
+                    "success": None, "failed": None, "attempted": None, "last_error_code": "provider_phase_failed",
+                    "finished_at": _text(row.get("finished_at")), "resume_after": _text(row.get("resume_after"))})
+                continue
             response["providers"].append({"provider": name, "status": _text(row.get("status")),
+                "counts_available": True,
                 "success": _count(row, "success"), "failed": _count(row, "failed"),
                 "attempted": _count(row, "attempted"), "last_error_code": _text(row.get("last_error_code")),
                 "finished_at": _text(row.get("finished_at")), "resume_after": _text(row.get("resume_after"))})
     except (OSError, ValueError):
         response.update({"run_available": False, "providers": []})
+    try:
+        evidence = _read(root, "catalogue/current-listing-gap-evidence-v1.json", "current-listing-gap-evidence-v1")
+        items = evidence.get("items")
+        if not isinstance(items, list) or not all(isinstance(item, dict) for item in items):
+            raise ValueError("invalid_listing_evidence")
+        endpoint = [item for item in items if item.get("reason") == "endpoint_or_bridge_gap"]
+        present = sum(item.get("listing_evidence") == "present_in_current_directory" for item in endpoint)
+        absent = sum(item.get("listing_evidence") == "absent_from_current_directory_unknown" for item in endpoint)
+        if present + absent != len(endpoint):
+            raise ValueError("invalid_listing_classification")
+        response["listing_evidence"] = {"observed_at": _text(evidence.get("observed_at")),
+            "target_date": _text(evidence.get("target_date")), "present_endpoint_gaps": present,
+            "absent_endpoint_gaps_unknown": absent, "research_qualified": False}
+    except (OSError, ValueError):
+        pass
     return response

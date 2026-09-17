@@ -22,6 +22,7 @@ from .daily_quote_browser import DailyQuoteInputError, DailyQuoteUnavailable, re
 from .jobs import JobInputError, JobStore, JobWorker, Submission
 from .factor_jobs import FactorResearchError, public_availability
 from .backtest import public_availability as backtest_public_availability
+from .backtest_reports import BacktestReportError, compare_reports, get_report, list_reports
 from .strategy_drafts import DraftInputError, StrategyDraftStore, template_catalogue
 from .visual_strategy_drafts import VisualStrategyDraftInputError, VisualStrategyDraftStore
 from .universe_drafts import AssetPoolDraftStore, InstrumentDraftStore, UniverseDraftInputError
@@ -184,6 +185,24 @@ def create_app() -> FastAPI:
     @app.get("/api/v1/backtests/availability")
     def backtest_availability() -> dict[str, object]:
         return backtest_public_availability()
+
+    @app.get("/api/v1/backtests/reports")
+    def backtest_reports(limit: int = Query(default=50, ge=1, le=100)) -> dict[str, object]:
+        return {"schema_version": "p3-05-synthetic-report-v1", "items": list_reports(store, limit)}
+
+    @app.get("/api/v1/backtests/reports/compare")
+    def compare_backtest_reports(left_job_id: str = Query(min_length=1, max_length=64), right_job_id: str = Query(min_length=1, max_length=64)) -> dict[str, object]:
+        try:
+            return compare_reports(store, left_job_id, right_job_id)
+        except BacktestReportError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/v1/backtests/reports/{job_id}")
+    def backtest_report(job_id: str) -> dict[str, object]:
+        try:
+            return get_report(store, job_id)
+        except BacktestReportError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.get("/api/v1/strategy-templates")
     def strategy_templates() -> dict[str, object]:

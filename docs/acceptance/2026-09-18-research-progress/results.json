@@ -1,0 +1,12 @@
+{
+  "reports": 3,
+  "report_job": "40135fbd-b263-4188-8643-76d45a26a25b",
+  "api_read": "passed",
+  "same_input_compare": "passed",
+  "invalid_id": "passed",
+  "desktop_report": "passed",
+  "desktop_compare": "passed",
+  "failure_retry": "passed",
+  "mobile_no_overflow": "passed",
+  "pageErrors": []
+}

@@ -12,6 +12,7 @@ from collections import defaultdict
 from datetime import date, datetime, time as daytime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
+import re
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -23,6 +24,11 @@ from .pipeline import FatalProviderError, load_alpaca_credentials, make_alpaca_d
 _NY = ZoneInfo("America/New_York")
 _URL = "https://data.alpaca.markets/v2/stocks/bars"
 _MAX_PAGES = 64
+_SYMBOL = re.compile(r"[A-Z0-9.$_-]{1,32}")
+
+
+def _valid_symbol(value: str) -> bool:
+    return bool(_SYMBOL.fullmatch(value))
 
 
 def _unknown_history() -> Exception:
@@ -62,26 +68,29 @@ class _SIPBatchDownloader:
         self.last_request_at: float | None = None
         self.batch_request_count = 0
         self.single_request_count = 0
-        self.by_symbol: dict[str, tuple[date, date, tuple[str, ...]]] = {}
+        self.by_symbol: dict[str, tuple[date, date, str, tuple[str, ...]]] = {}
+        self.original_by_provider: dict[str, str] = {}
         grouped: dict[tuple[date, date], list[str]] = defaultdict(list)
         seen_symbols: set[str] = set()
         for task in tasks:
             try:
                 symbol = str(task["symbol"]).strip().upper()
+                provider_symbol = str(task.get("provider_symbol", symbol)).strip().upper()
                 start, end = date.fromisoformat(str(task["requested_start"])), date.fromisoformat(str(task["requested_end"]))
-                if not symbol or start > end or symbol in seen_symbols:
+                if not _valid_symbol(symbol) or not _valid_symbol(provider_symbol) or start > end or symbol in seen_symbols or provider_symbol in self.original_by_provider:
                     raise ValueError
             except (KeyError, TypeError, ValueError) as exc:
                 raise ValueError("sip_batch_tasks_invalid") from exc
             seen_symbols.add(symbol)
-            grouped[(start, end)].append(symbol)
+            self.original_by_provider[provider_symbol] = symbol
+            grouped[(start, end)].append(provider_symbol)
         self.chunks: dict[tuple[str, ...], tuple[date, date]] = {}
         for (start, end), symbols in grouped.items():
             for offset in range(0, len(symbols), batch_size):
                 chunk = tuple(symbols[offset:offset + batch_size])
                 self.chunks[chunk] = (start, end)
-                for symbol in chunk:
-                    self.by_symbol[symbol] = (start, end, chunk)
+                for provider_symbol in chunk:
+                    self.by_symbol[self.original_by_provider[provider_symbol]] = (start, end, provider_symbol, chunk)
         self.frames: dict[str, pd.DataFrame] = {}
         self.errors: dict[tuple[str, ...], Exception] = {}
         self.fallback_chunks: set[tuple[str, ...]] = set()
@@ -151,7 +160,8 @@ class _SIPBatchDownloader:
             else:
                 raise ValueError("alpaca_batch_page_limit_exceeded")
             # Publish only after all pages are valid and terminal.
-            for symbol, symbol_rows in rows.items():
+            for provider_symbol, symbol_rows in rows.items():
+                symbol = self.original_by_provider[provider_symbol]
                 if not symbol_rows:
                     self.frames[symbol] = pd.DataFrame()
                 else:
@@ -162,7 +172,7 @@ class _SIPBatchDownloader:
             self.errors[chunk] = exc
             raise
 
-    def _single_fallback(self, symbol: str, start: date, end: date) -> pd.DataFrame:
+    def _single_fallback(self, symbol: str, provider_symbol: str, start: date, end: date) -> pd.DataFrame:
         key = (symbol, start, end)
         if key in self.single_errors:
             raise self.single_errors[key]
@@ -177,7 +187,7 @@ class _SIPBatchDownloader:
                                                 request_get=_alpaca_sip_request_wrapper(self.now, request_get=throttled_request))
             self.single[key] = downloader
         try:
-            frame = downloader(symbol, start, end)
+            frame = downloader(provider_symbol, start, end)
         except Exception as exc:
             self.single_errors[key] = exc
             raise
@@ -189,7 +199,7 @@ class _SIPBatchDownloader:
         task = self.by_symbol.get(normalized)
         if task is None or task[:2] != (start, end):
             raise ValueError("sip_batch_symbol_or_window_not_planned")
-        _, _, chunk = task
+        _, _, provider_symbol, chunk = task
         if chunk in self.errors:
             raise self.errors[chunk]
         if chunk not in self.fallback_chunks and normalized not in self.frames:
@@ -197,7 +207,7 @@ class _SIPBatchDownloader:
         if chunk in self.errors:
             raise self.errors[chunk]
         if chunk in self.fallback_chunks:
-            return self._single_fallback(normalized, start, end)
+            return self._single_fallback(normalized, provider_symbol, start, end)
         frame = self.frames[normalized]
         if frame.empty:
             raise _unknown_history()

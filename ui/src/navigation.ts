@@ -32,8 +32,8 @@ export const navigation: NavGroup[] = [
   { id: 'backtests', label: '历史回测', icon: Activity, children: [
     { id: 'new-backtest', label: '新建回测', description: '运行合成美股日线限价验收路径；真实市场回测因资产池、公司行为和退市数据门禁而受阻。', capabilities: ['合成验收', '限价路径', '前置检查'], availability: 'limited', reason: '仅支持合成日线验收，不开放正式回测。' },
     { id: 'backtest-jobs', label: '回测任务', description: '查看服务端研究和回测任务的排队、运行和失败信息；不在此新建或取消任务。', capabilities: ['任务状态', '失败原因', '产物索引'], availability: 'ready' },
-    { id: 'backtest-reports', label: '回测报告', description: '计划展示回测收益、成本、持仓和数据警告；当前没有正式回测报告可查看。', capabilities: ['收益风险', '成本报告', '数据警告'], availability: 'planned', reason: '正式回测与报告能力尚未开放。' },
-    { id: 'result-comparison', label: '结果对比', description: '计划比较不同回测结果、参数和时间段；当前没有结果对比功能。', capabilities: ['结果比较', '参数差异', '基准比较'], availability: 'planned', reason: '可比较的正式回测结果尚不可用。' },
+    { id: 'backtest-reports', label: '回测报告', description: '只读展示已发布合成验收工件的持仓、成交、费用、账本、版本和数据边界；不代表真实回测。', capabilities: ['合成账本', '成本与成交', '版本与哈希'], availability: 'limited', reason: '仅支持 P3-03 合成验收报告；真实回测仍受门禁阻断。' },
+    { id: 'result-comparison', label: '结果对比', description: '只比较完整合成 bar、订单/成本合同和区间等均一致的验收工件；任何差异都会明确标为不可比。', capabilities: ['合同校验', '终值账本差异', '版本差异'], availability: 'limited', reason: '仅支持同一合成验收合同，不生成真实收益或风险比较。' },
     { id: 'robustness', label: '策略可靠性检验', description: '计划进行样本外、滚动和成本压力检验；当前没有可靠性检验任务或结果。', capabilities: ['样本外检验', '压力测试', '历史回放'], availability: 'planned', reason: '稳健性研究流程尚未接入。' },
   ] },
   { id: 'portfolio', label: '账户与资金', icon: BriefcaseBusiness, children: [

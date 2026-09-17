@@ -7,6 +7,7 @@ import { Layout } from './components/Layout'
 import { PlaceholderPage } from './components/PlaceholderPage'
 import { TaskOverview } from './components/TaskOverview'
 import { BacktestWizard } from './components/BacktestWizard'
+import { BacktestReports } from './components/BacktestReports'
 import { StrategyWorkspace } from './components/StrategyWorkspace'
 import { VisualStrategyWorkspace } from './components/VisualStrategyWorkspace'
 import { SecurityCatalogueWorkspace } from './components/SecurityCatalogueWorkspace'
@@ -40,6 +41,8 @@ export default function App() {
   else if (activeId === 'factor-catalogue') content = <FactorCatalogue />
   else if (activeId === 'factor-research') content = <FactorResearch />
   else if (activeId === 'new-backtest') content = <BacktestWizard />
+  else if (activeId === 'backtest-reports') content = <BacktestReports view="reports" />
+  else if (activeId === 'result-comparison') content = <BacktestReports view="compare" />
   else if (activeId === 'strategy-templates') content = <StrategyWorkspace />
   else if (activeId === 'my-strategies' || activeId === 'strategy-details') content = <VisualStrategyWorkspace onNavigate={navigate} pageTitle={child.label} />
   else if (activeId === 'instruments') content = <SecurityCatalogueWorkspace />

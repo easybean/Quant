@@ -6,6 +6,20 @@ import pytest
 from quant_data.security_catalog import SecurityCatalogueInputError, SecurityCatalogueStore
 
 
+def test_cli_uses_verified_acquisition_pointer_when_data_root_supplied(monkeypatch, tmp_path):
+    from quant_data.security_catalog import main
+    from quant_data import sync_scheduler
+    master = tmp_path / "master.parquet"
+    _master(master)
+    calls = []
+    def resolve(root, base):
+        calls.append((root, base))
+        return master
+    monkeypatch.setattr(sync_scheduler, "resolve_sync_master", resolve)
+    assert main(["--master", str(tmp_path / "old.parquet"), "--state-root", str(tmp_path / "state"), "--data-root", str(tmp_path)]) == 0
+    assert calls == [(tmp_path, tmp_path / "old.parquet")]
+
+
 def _master(path):
     frame = pd.DataFrame([
         {"symbol": "TSLA", "raw_symbol": "TSLA", "name": "Tesla, Inc.", "exchange": "NASDAQ", "asset_type": "Stock", "ipo_date": "2010-06-29", "delisting_date": None, "status": "active", "source": "nasdaq", "source_as_of": "2026-09-16", "sources": ["nasdaq"], "provenance": {"source": "nasdaq"}},

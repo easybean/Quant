@@ -41,3 +41,29 @@ def test_provider_projection_does_not_expose_runtime_configuration(tmp_path):
     row["failed"] = -1
     (run / "latest.json").write_text(json.dumps({"providers": {"alpaca": row}}))
     assert not sync_status_payload(tmp_path)["run_available"]
+
+
+def test_listing_absence_remains_unknown_and_does_not_reduce_pending(tmp_path):
+    folder = tmp_path / "manifests/yahoo-daily-v1"
+    folder.mkdir(parents=True)
+    (folder / "coverage.json").write_text(json.dumps({"schema_version": "yahoo-sync-coverage-v1", "active_symbols": 2, "endpoint_current": 0, "needs_update": 2, "historical_only_symbols": 0}))
+    catalogue = tmp_path / "catalogue"
+    catalogue.mkdir()
+    (catalogue / "current-listing-gap-evidence-v1.json").write_text(json.dumps({"schema_version": "current-listing-gap-evidence-v1", "items": [{"reason": "endpoint_or_bridge_gap", "listing_evidence": "present_in_current_directory"}, {"reason": "endpoint_or_bridge_gap", "listing_evidence": "absent_from_current_directory_unknown"}]}))
+    result = sync_status_payload(tmp_path)
+    assert result["needs_update"] == 2
+    assert result["listing_evidence"]["present_endpoint_gaps"] == 1
+    assert result["listing_evidence"]["absent_endpoint_gaps_unknown"] == 1
+
+
+def test_provider_phase_exception_preserves_other_evidence_without_inventing_counts(tmp_path):
+    folder = tmp_path / "manifests/yahoo-daily-v1"; folder.mkdir(parents=True)
+    (folder / "coverage.json").write_text(json.dumps({"schema_version": "yahoo-sync-coverage-v1", "active_symbols": 1, "endpoint_current": 0, "needs_update": 1, "historical_only_symbols": 0}))
+    run = tmp_path / "manifests/us-daily-sync"; run.mkdir()
+    (run / "latest.json").write_text(json.dumps({"status": "partial", "providers": {"yahoo": {"status": "failed", "error_type": "ValueError"}, "alpaca": {"status": "success", "attempted": 1, "success": 1, "failed": 0}}}))
+    result = sync_status_payload(tmp_path)
+    assert result["run_available"]
+    assert result["providers"][0]["success"] == 1
+    yahoo = result["providers"][1]
+    assert yahoo["counts_available"] is False and yahoo["attempted"] is None
+    assert yahoo["last_error_code"] == "provider_phase_failed"

@@ -1,12 +1,12 @@
 [Unit]
 Description=Import local US security master into provisional reference catalogue
+After=quant-current-listing-evidence.service
 
 [Service]
 Type=oneshot
 WorkingDirectory=/home/davidou/quant/app
 Environment=PYTHONPATH=/home/davidou/quant/app/src
-ExecStart=/home/davidou/quant/venv/bin/python -m quant_data.security_catalog --master /home/davidou/quant/data/metadata/security_master.consolidated.parquet --state-root /home/davidou/quant/app/data/workbench-state
+ExecStart=/home/davidou/quant/venv/bin/python -m quant_data.security_catalog --master /home/davidou/quant/data/metadata/security_master.consolidated.parquet --state-root /home/davidou/quant/app/data/workbench-state --data-root /home/davidou/quant/data
 TimeoutStartSec=10min
 Nice=10
 UMask=0077
-

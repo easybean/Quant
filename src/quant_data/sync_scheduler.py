@@ -21,8 +21,51 @@ from .daily_quote_browser import (_canonical_catalogue, _base_priority,
                                  _is_append_source, _safe_raw_relative, refresh_yahoo_browser_catalogue)
 from .sync_eligibility import select_sync_symbols, eligibility_report
 from .recovery_sync import run_recovery
+from .symbol_mapping import MAPPING_NAMESPACE, load_symbol_mapping, mapping_tail_tasks
 
 NAMESPACES = ("alpaca-sip-recovery-v1", "yahoo-daily-v1", "nasdaq-daily-recovery-v1")
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _resolve_pointer(root: Path, name: str, schema: str) -> Path | None:
+    pointer_path = root / "catalogue" / name
+    if not pointer_path.exists():
+        return None
+    try:
+        pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
+        relative, expected = pointer["relative_path"], pointer["sha256"]
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        raise ValueError("current_pointer_invalid") from exc
+    relative_path = Path(relative) if isinstance(relative, str) else None
+    if (pointer.get("schema_version") != schema or relative_path is None or not relative or relative_path.is_absolute()
+            or ".." in relative_path.parts or not isinstance(expected, str) or len(expected) != 64):
+        raise ValueError("current_pointer_invalid")
+    lexical = root / relative_path
+    cursor = root
+    for part in relative_path.parts:
+        cursor = cursor / part
+        if cursor.is_symlink():
+            raise ValueError("current_pointer_invalid")
+    candidate = lexical.resolve()
+    if root.resolve() not in candidate.parents or lexical.is_symlink() or not candidate.is_file() or _file_sha256(candidate) != expected:
+        raise ValueError("current_pointer_invalid")
+    return candidate
+
+
+def resolve_sync_master(root: Path, base_master: Path) -> Path:
+    """Use the publisher's immutable acquisition master only when verified."""
+    return _resolve_pointer(root, "current-acquisition-master-v1.json", "current-acquisition-master-v1") or base_master
+
+
+def resolve_current_symbol_mapping(root: Path) -> Path | None:
+    return _resolve_pointer(root, "current-symbol-mapping-v1.json", "current-symbol-mapping-v1")
 
 
 def completed_session(now: datetime) -> date:
@@ -45,6 +88,7 @@ def build_gap_plan(root: Path, master_path: Path, *, now: datetime | None = None
     target = completed_session(now)
     import exchange_calendars as xc
     cal = xc.get_calendar("XNYS", start="2016-01-01", end=f"{now.year + 1}-12-31")
+    master_path = resolve_sync_master(root, master_path)
     master = pd.read_parquet(master_path)
     active = select_sync_symbols(master)
     baseline = _load(root / "manifests/yahoo-daily-v1/baselines.json", {"symbols": {}})["symbols"]
@@ -118,6 +162,25 @@ def build_gap_plan(root: Path, master_path: Path, *, now: datetime | None = None
         tasks.append({"symbol": symbol, "requested_start": start.isoformat(), "requested_end": target.isoformat(),
                       "task_id": hashlib.sha256(identity.encode()).hexdigest(), "latest_date": latest,
                       "reason": "missing_sessions_candidate" if historical_candidate else "endpoint_or_bridge_gap"})
+    # A current provider spelling may fill only the endpoint tail.  Retain the
+    # prior portion as a durable, unverified acquisition task instead of
+    # allowing a current mapping to make a 2016-present history appear done.
+    pending_history = _load(root / "manifests" / MAPPING_NAMESPACE / "remaining-history.json", {"items": []})
+    if pending_history.get("schema_version", "symbol-mapping-remaining-history-v1") != "symbol-mapping-remaining-history-v1" or not isinstance(pending_history.get("items"), list):
+        raise ValueError("mapping_remaining_history_invalid")
+    represented = {str(task["symbol"]) for task in tasks}
+    for item in pending_history["items"]:
+        try:
+            symbol = str(item["symbol"]).upper(); start = date.fromisoformat(str(item["requested_start"])); end = date.fromisoformat(str(item["requested_end"]))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("mapping_remaining_history_invalid") from exc
+        if (item.get("status") != "unverified" or item.get("research_qualified") is not False or symbol not in active or symbol in represented or start > end):
+            continue
+        identity = f"mapping-history|{item.get('original_task_id')}|{symbol}|{start}|{end}"
+        tasks.append({"symbol": symbol, "requested_start": start.isoformat(), "requested_end": end.isoformat(),
+                      "task_id": hashlib.sha256(identity.encode()).hexdigest(), "latest_date": views.get(symbol, {}).get("last_date"),
+                      "reason": "mapping_window_remaining_history_unverified", "remaining_history_unverified": True})
+        represented.add(symbol)
     # Recent endpoint deficits first, then historical candidates; provider
     # journals enforce fairness between retries and never-attempted tasks.
     tasks.sort(key=lambda t: (t["latest_date"] is not None and t["latest_date"] >= target.isoformat(), t["latest_date"] is None, t["symbol"]))
@@ -127,6 +190,7 @@ def build_gap_plan(root: Path, master_path: Path, *, now: datetime | None = None
             "endpoint_without_known_gap": current, "pending": len(tasks), "tasks": tasks,
             "endpoint_or_bridge_pending": sum(t["reason"] == "endpoint_or_bridge_gap" for t in tasks),
             "historical_candidate_tasks": sum(t["reason"] == "missing_sessions_candidate" for t in tasks),
+            "mapping_window_remaining_history_tasks": sum(t["reason"] == "mapping_window_remaining_history_unverified" for t in tasks),
             "audit_symbols_this_cycle": len(batch), "audit_symbols_total": len(audit["symbols"]),
             "audit_errors": sum(bool(d.get("error")) for d in audit["symbols"].values()),
             "research_qualified": False, "warning": "Rotating session audit is incomplete until all symbols are checked; missing sessions may be halts/provider gaps, not confirmed tradable sessions. Historical identity and corporate actions remain unverified."}
@@ -170,24 +234,80 @@ def due_tasks(plan: dict, records: Path, now: datetime) -> list[dict]:
     return ready
 
 
-def run_cycle(root: Path, master: Path, credential_file: Path, *, budget: float = 240) -> dict:
+def _run_mapped_alpaca_queue(root: Path, master: Path, credential_file: Path, folder: Path, plan: dict, state: dict, budget: float, mapping: dict) -> tuple[set[str], dict]:
+    mapped = mapping_tail_tasks(plan["tasks"], mapping, current_target=plan["target_date"])
+    original_task_ids = {str(task["original_task_id"]) for task in mapped}
+    if not mapped:
+        return original_task_ids, state
+    now = datetime.now(timezone.utc); previous = state["providers"].get("alpaca-mapped", {})
+    resume = previous.get("resume_after")
+    if resume and now < datetime.fromisoformat(resume):
+        return original_task_ids, state
+    mapped_plan = {**plan, "tasks": mapped}
+    ready = due_tasks(mapped_plan, root / "manifests" / MAPPING_NAMESPACE / "records.jsonl", now)
+    if not ready:
+        return original_task_ids, state
+    queue = folder / "alpaca-mapped-due.json"; _atomic_json(queue, {**mapped_plan, "tasks": ready})
+    state["current_provider"] = "alpaca-mapped"; _atomic_json(folder / "latest.json", state)
+    try:
+        result = run_recovery(master, root, gap_queue=queue, recovery_provider="alpaca", credential_file=credential_file,
+                              request_delay=0, max_runtime_seconds=budget * 3)
+        cooldown = 6 * 60 if result.get("last_error_code") in {"http_401", "http_403", "provider_authorization_failed"} else 30
+        state["providers"]["alpaca-mapped"] = {**result, "resume_after": (datetime.now(timezone.utc) + timedelta(minutes=cooldown)).isoformat() if result.get("circuit_open") else None}
+    except Exception as exc:
+        state["providers"]["alpaca-mapped"] = {"status": "failed", "error_type": type(exc).__name__, "resume_after": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()}
+    _atomic_json(folder / "latest.json", state)
+    return original_task_ids, state
+
+
+def run_cycle(root: Path, master: Path, credential_file: Path, *, budget: float = 240, symbol_mapping: Path | None = None) -> dict:
     if not math.isfinite(budget) or budget <= 0: raise ValueError("provider_budget_must_be_positive_finite")
     folder = root / "manifests/us-daily-sync"; folder.mkdir(parents=True, exist_ok=True)
     with (folder / "scheduler.lock").open("a+") as lock:
         try: fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError: return {"status": "skipped", "reason": "lock_held"}
         refresh_yahoo_browser_catalogue(root)
-        plan = build_gap_plan(root, master)
+        resolved_master = resolve_sync_master(root, master)
+        mapping_path = symbol_mapping or resolve_current_symbol_mapping(root)
+        mapping = None
+        mapping_status = None
+        if mapping_path is not None:
+            try:
+                mapping = load_symbol_mapping(mapping_path)
+            except ValueError as exc:
+                # An old current-directory observation must never keep mapping
+                # newer endpoint tasks, but it is not a reason to stop the
+                # ordinary Alpaca/Yahoo/Nasdaq recovery paths.
+                if str(exc) != "symbol_mapping_stale":
+                    raise
+                mapping_status = "stale_not_used"
+        plan = build_gap_plan(root, resolved_master)
         state = _load(folder / "latest.json", {"providers": {}})
         state.update({"status": "running", "target_date": plan["target_date"], "pending_before": plan["pending"]})
+        if mapping_status:
+            state["symbol_mapping"] = {"status": mapping_status}
+        else:
+            state.pop("symbol_mapping", None)
         state.pop("finished_at", None)
         _atomic_json(folder / "latest.json", state)
+        mapped_original_task_ids: set[str] = set()
+        if mapping is not None:
+            mapped_original_task_ids, state = _run_mapped_alpaca_queue(root, resolved_master, credential_file, folder, plan, state, budget, mapping)
+            refresh_yahoo_browser_catalogue(root)
+            plan = build_gap_plan(root, resolved_master, audit_limit=0)
         for provider, namespace in zip(("alpaca", "yahoo", "nasdaq"), NAMESPACES):
             now = datetime.now(timezone.utc)
             previous = state["providers"].get(provider, {})
             resume = previous.get("resume_after")
             if resume and now < datetime.fromisoformat(resume): continue
             ready = due_tasks(plan, root / "manifests" / namespace / "records.jsonl", now)
+            # These are retained historical-identity/coverage review obligations,
+            # not current endpoint requests. In particular Yahoo's fixed-target
+            # contract rejects their earlier end dates; never feed them to a
+            # current-price queue or widen their window implicitly.
+            ready = [task for task in ready if task.get("reason") != "mapping_window_remaining_history_unverified"]
+            if provider == "alpaca":
+                ready = [task for task in ready if task["task_id"] not in mapped_original_task_ids]
             if not ready: continue
             provider_plan = {**plan, "tasks": ready}
             queue = folder / f"{provider}-due.json"; _atomic_json(queue, provider_plan)
@@ -195,10 +315,10 @@ def run_cycle(root: Path, master: Path, credential_file: Path, *, budget: float 
             _atomic_json(folder / "latest.json", state)
             try:
                 if provider == "yahoo":
-                    result = run_sync(master, root, gap_queue=queue, baseline_index=root / "manifests/yahoo-daily-v1/baselines.json",
+                    result = run_sync(resolved_master, root, gap_queue=queue, baseline_index=root / "manifests/yahoo-daily-v1/baselines.json",
                                       request_delay=2, max_runtime_seconds=budget)
                 else:
-                    result = run_recovery(master, root, gap_queue=queue, recovery_provider=provider,
+                    result = run_recovery(resolved_master, root, gap_queue=queue, recovery_provider=provider,
                                           credential_file=credential_file if provider == "alpaca" else None,
                                           request_delay=0 if provider == "alpaca" else 2, max_runtime_seconds=budget * 3 if provider == "alpaca" else budget / 4)
                 cooldown = 6 * 60 if result.get("last_error_code") in {"http_401", "http_403", "provider_authorization_failed"} else 30
@@ -208,7 +328,7 @@ def run_cycle(root: Path, master: Path, credential_file: Path, *, budget: float 
                     "resume_after": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()}
             _atomic_json(folder / "latest.json", state)
             refresh_yahoo_browser_catalogue(root)
-            plan = build_gap_plan(root, master, audit_limit=0)
+            plan = build_gap_plan(root, resolved_master, audit_limit=0)
         state.update({"status": "partial" if plan["pending"] else "endpoint_complete_audit_pending", "pending_after": plan["pending"],
                       "endpoint_or_bridge_pending": plan["endpoint_or_bridge_pending"], "historical_candidate_tasks": plan["historical_candidate_tasks"],
                       "finished_at": datetime.now(timezone.utc).isoformat()})
@@ -223,8 +343,9 @@ def main():
     parser.add_argument("--security-master", type=Path, required=True)
     parser.add_argument("--credential-file", type=Path, required=True)
     parser.add_argument("--provider-budget", type=float, default=240)
+    parser.add_argument("--symbol-mapping", type=Path)
     args = parser.parse_args()
-    print(json.dumps(run_cycle(args.data_root, args.security_master, args.credential_file, budget=args.provider_budget)))
+    print(json.dumps(run_cycle(args.data_root, args.security_master, args.credential_file, budget=args.provider_budget, symbol_mapping=args.symbol_mapping)))
 
 
 if __name__ == "__main__": main()

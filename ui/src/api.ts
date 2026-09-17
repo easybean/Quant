@@ -88,6 +88,11 @@ export type BacktestAvailability = {
     limitations: string[]
   }
 }
+export type BacktestReportContract = { dataset_version: string; asset_pool_version: string; calendar_version: string; engine_version: string; price_basis: string; currency: 'USD'; date_range: { start: string; end: string }; bars_sha256: string; initial_cash: string; corporate_actions: string; execution_contract: Record<string, string> }
+export type BacktestReportMetrics = { initial_cash: string; free_cash: string; terminal_equity: string; total_pnl: string; total_return_pct: string; fees: string; unrealized_pnl: string }
+export type BacktestReportSummary = { job_id: string; available: boolean; reason?: string; label?: string; contract?: BacktestReportContract; metrics?: BacktestReportMetrics; versions?: { backtest_schema: string; engine: Record<string, unknown>; code_version: string; input_fingerprint: string; strategy: Record<string, unknown> }; created_at?: string | null }
+export type BacktestReport = Omit<BacktestReportSummary, 'available' | 'label' | 'contract' | 'metrics' | 'versions'> & { available: true; label: string; contract: BacktestReportContract; metrics: BacktestReportMetrics; versions: { backtest_schema: string; engine: Record<string, unknown>; code_version: string; input_fingerprint: string; strategy: Record<string, unknown> }; artifact: { name: string; sha256: string; sha256_status: 'computed_read_time_only'; report_hash: string; report_hash_verified: boolean }; holdings: Array<{ symbol: string; quantity: string; mark_price: string; market_value: string; price_basis: string }>; fills: Array<{ day: string; quantity: string; price: string; fee_usd: string }>; execution: Record<string, unknown>; warnings: string[] }
+export type BacktestComparison = { schema_version: string; left: BacktestReportSummary; right: BacktestReportSummary; comparable: boolean; non_comparable_reasons: string[]; comparison_scope: string; differences?: { terminal_equity: string; total_pnl: string; total_return_pct: string; fees: string }; version_differences?: Record<string, { left: unknown; right: unknown }> }
 export type StrategyTemplate = { id: 'buy_and_hold' | 'dual_moving_average'; version: string; name: string; description: string; parameters: Record<string, { type: string; required: boolean; default?: string; range?: string; description: string }> }
 export type StrategyDraft = { id: string; draft_id: string; name: string; template: StrategyTemplate['id']; template_version: string; parameters: Record<string, unknown>; created_at: string; updated_at?: string; version: number }
 export type VisualSignalRule = { factor_id: string; operator: 'gt' | 'gte' | 'lt' | 'lte'; threshold: number; direction: 'long' | 'exclude' }
@@ -116,6 +121,7 @@ export const jobsUrl = `${baseUrl}/api/v1/jobs`
 export const experimentsUrl = `${baseUrl}/api/v1/experiments`
 export const factorResearchAvailabilityUrl = `${baseUrl}/api/v1/factor-research/availability`
 export const backtestAvailabilityUrl = `${baseUrl}/api/v1/backtests/availability`
+export const backtestReportsUrl = `${baseUrl}/api/v1/backtests/reports`
 export const strategyTemplatesUrl = `${baseUrl}/api/v1/strategy-templates`
 export const strategyDraftsUrl = `${baseUrl}/api/v1/strategy-drafts`
 export const visualStrategyDraftsUrl = `${baseUrl}/api/v1/visual-strategy-drafts`
@@ -264,6 +270,28 @@ export async function fetchBacktestAvailability(signal: AbortSignal): Promise<Ba
   const payload: unknown = await response.json()
   if (!payload || typeof payload !== 'object' || !('formal_backtest_available' in payload) || !('synthetic_acceptance' in payload)) throw new Error('回测门禁返回了无效数据')
   return payload as BacktestAvailability
+}
+export async function fetchBacktestReports(signal: AbortSignal): Promise<BacktestReportSummary[]> {
+  const response = await fetch(backtestReportsUrl, { signal, headers: { Accept: 'application/json' } })
+  if (!response.ok) throw new Error(`回测报告暂不可用（HTTP ${response.status}）`)
+  const payload: unknown = await response.json()
+  if (!payload || typeof payload !== 'object' || !Array.isArray((payload as { items?: unknown }).items)) throw new Error('回测报告列表返回了无效数据')
+  return (payload as { items: BacktestReportSummary[] }).items
+}
+export async function fetchBacktestReport(jobId: string, signal: AbortSignal): Promise<BacktestReport> {
+  const response = await fetch(`${backtestReportsUrl}/${encodeURIComponent(jobId)}`, { signal, headers: { Accept: 'application/json' } })
+  const payload: unknown = await response.json()
+  if (!response.ok) throw new Error(typeof payload === 'object' && payload && 'detail' in payload ? String((payload as { detail: unknown }).detail) : `报告读取失败（HTTP ${response.status}）`)
+  if (!payload || typeof payload !== 'object' || (payload as BacktestReport).available !== true || !('artifact' in payload)) throw new Error('回测报告返回了无效数据')
+  return payload as BacktestReport
+}
+export async function compareBacktestReports(leftJobId: string, rightJobId: string, signal: AbortSignal): Promise<BacktestComparison> {
+  const query = new URLSearchParams({ left_job_id: leftJobId, right_job_id: rightJobId })
+  const response = await fetch(`${backtestReportsUrl}/compare?${query}`, { signal, headers: { Accept: 'application/json' } })
+  const payload: unknown = await response.json()
+  if (!response.ok) throw new Error(typeof payload === 'object' && payload && 'detail' in payload ? String((payload as { detail: unknown }).detail) : `结果对比失败（HTTP ${response.status}）`)
+  if (!payload || typeof payload !== 'object' || typeof (payload as BacktestComparison).comparable !== 'boolean') throw new Error('结果对比返回了无效数据')
+  return payload as BacktestComparison
 }
 export async function submitBacktest(body: Record<string, unknown>, key: string): Promise<Job> {
   const response = await fetch(jobsUrl, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': key }, body: JSON.stringify(body) })

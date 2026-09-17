@@ -253,7 +253,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Import a consolidated security master into the provisional catalogue")
     parser.add_argument("--master", required=True, type=Path)
     parser.add_argument("--state-root", required=True, type=Path)
+    parser.add_argument("--data-root", type=Path)
     args = parser.parse_args(argv)
+    if args.data_root is not None:
+        from .sync_scheduler import resolve_sync_master
+        args.master = resolve_sync_master(args.data_root, args.master)
     store = SecurityCatalogueStore(args.state_root); store.initialize()
     print(json.dumps(store.import_master(args.master), sort_keys=True))
     return 0

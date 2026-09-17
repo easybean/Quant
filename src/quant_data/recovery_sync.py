@@ -26,6 +26,7 @@ from zoneinfo import ZoneInfo
 from .daily_sync import _target_end, _validate_normalized, yahoo_daily_history_downloader
 from .sync_eligibility import select_sync_symbols
 from .pipeline import FatalProviderError, PermanentDownloadError, make_alpaca_downloader, nasdaq_web_downloader, normalize_bars, symbol_key
+from .symbol_mapping import MAPPING_NAMESPACE
 
 NAMESPACE = "nasdaq-daily-recovery-v1"
 PROVIDER = "nasdaq"
@@ -75,6 +76,33 @@ def _append(path: Path, row: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(row, sort_keys=True, default=str) + "\n")
+
+
+def _record_unverified_mapping_history(manifest: Path, task: dict[str, Any]) -> None:
+    """Keep the unmapped historical portion visible after a mapped tail lands."""
+    remaining = task.get("remaining_history_unverified")
+    if not isinstance(remaining, dict):
+        return
+    try:
+        start, end = date.fromisoformat(str(remaining["requested_start"])), date.fromisoformat(str(remaining["requested_end"]))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("mapping_remaining_history_invalid") from exc
+    if start > end:
+        raise ValueError("mapping_remaining_history_invalid")
+    path = manifest / "remaining-history.json"
+    payload: dict[str, Any] = {"schema_version": "symbol-mapping-remaining-history-v1", "items": []}
+    if path.exists():
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError) as exc:
+            raise ValueError("mapping_remaining_history_invalid") from exc
+    if payload.get("schema_version") != "symbol-mapping-remaining-history-v1" or not isinstance(payload.get("items"), list):
+        raise ValueError("mapping_remaining_history_invalid")
+    key = str(task.get("original_task_id", ""))
+    item = {"original_task_id": key, "symbol": str(task["symbol"]), "requested_start": start.isoformat(), "requested_end": end.isoformat(),
+            "mapping_version": str(task["symbol_mapping"]["mapping_version"]), "status": "unverified", "research_qualified": False}
+    payload["items"] = [row for row in payload["items"] if not isinstance(row, dict) or row.get("original_task_id") != key] + [item]
+    _atomic_json(path, payload)
 
 
 def _read_master(path: Path) -> pd.DataFrame:
@@ -199,13 +227,26 @@ def run_recovery(security_master: Path, data_root: Path, *, max_runtime_seconds:
     default_downloader = downloader is None
     if recovery_provider not in {"nasdaq", "alpaca"}: raise ValueError("invalid_recovery_provider")
     is_alpaca = recovery_provider == "alpaca"
+    queued_plan = None
+    mapped_queue = False
+    if gap_queue is not None:
+        try:
+            queued_plan = json.loads(gap_queue.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError) as exc:
+            raise ValueError("gap_queue_invalid") from exc
+        if queued_plan.get("schema_version") != "us-daily-gap-queue-v1" or not isinstance(queued_plan.get("tasks"), list):
+            raise ValueError("gap_queue_invalid")
+        mapped_flags = [isinstance(task, dict) and "symbol_mapping" in task for task in queued_plan["tasks"]]
+        if any(mapped_flags) and (not is_alpaca or not all(mapped_flags)):
+            raise ValueError("mixed_or_invalid_symbol_mapping_queue")
+        mapped_queue = bool(mapped_flags and all(mapped_flags))
     if downloader is None:
         # SIP is explicit.  request_retries=0 guarantees this scheduler never
         # changes proxy, backs off, or silently switches to IEX after an error.
         downloader = make_alpaca_downloader(feed="sip", credential_file=credential_file, request_retries=0,
                                              request_get=_alpaca_sip_request_wrapper(now)) if is_alpaca else nasdaq_web_downloader
     base_provider, base_namespace, base_source, base_adjustment = (
-        ("alpaca", ALPACA_NAMESPACE, ALPACA_SOURCE, "raw") if is_alpaca else (PROVIDER, NAMESPACE, SOURCE, "unadjusted")
+        ("alpaca", MAPPING_NAMESPACE if mapped_queue else ALPACA_NAMESPACE, ALPACA_SOURCE, "raw") if is_alpaca else (PROVIDER, NAMESPACE, SOURCE, "unadjusted")
     )
     target = _target_end(now)
     manifest = data_root / "manifests" / base_namespace; records = manifest / "records.jsonl"; manifest.mkdir(parents=True, exist_ok=True)
@@ -229,9 +270,8 @@ def run_recovery(security_master: Path, data_root: Path, *, max_runtime_seconds:
       active = set(select_sync_symbols(master))
       failures = _latest_yahoo_failures(data_root / "manifests" / YAHOO_NAMESPACE / "records.jsonl")
       if gap_queue is not None:
-          plan = json.loads(gap_queue.read_text(encoding="utf-8"))
-          if plan.get("schema_version") != "us-daily-gap-queue-v1" or not isinstance(plan.get("tasks"), list):
-              raise ValueError("gap_queue_invalid")
+          assert queued_plan is not None
+          plan = queued_plan
           failures = {}
           for task in plan["tasks"]:
               symbol = str(task["symbol"])
@@ -274,16 +314,36 @@ def run_recovery(security_master: Path, data_root: Path, *, max_runtime_seconds:
         try:
           alias = VERIFIED_YAHOO_ALIASES.get(symbol) if not is_alpaca and downloader is nasdaq_web_downloader else None
           provider, namespace, source, adjustment = ("yfinance", ALIAS_NAMESPACE, "yfinance", "raw_ohlc_with_adjusted_close_and_actions") if alias else (base_provider, base_namespace, base_source, base_adjustment)
-          record.update({"provider": provider, "namespace": namespace, "source": source, "provider_symbol": alias or symbol})
-          raw = yahoo_daily_history_downloader(alias, start, end) if alias else downloader(symbol, start, end)
+          provider_symbol = str(failure.get("provider_symbol") or alias or symbol).strip().upper()
+          if mapped_queue:
+              mapping = failure.get("symbol_mapping")
+              if not (isinstance(mapping, dict) and mapping.get("research_qualified") is False and mapping.get("historical_identity") == "unknown"
+                      and mapping.get("provider_symbol", provider_symbol) == provider_symbol and mapping.get("mapping_version")):
+                  raise ValueError("symbol_mapping_task_invalid")
+              record.update({"symbol_mapping_id": mapping.get("mapping_id"), "symbol_mapping_version": mapping.get("mapping_version"),
+                             "provider_asset_id": mapping.get("provider_asset_id"), "historical_identity": "unknown", "research_qualified": False})
+              if failure.get("remaining_history_unverified") is not None:
+                  record["remaining_history_unverified"] = failure["remaining_history_unverified"]
+          record.update({"provider": provider, "namespace": namespace, "source": source, "provider_symbol": provider_symbol})
+          # The batch adapter's public key is the original symbol; it owns the
+          # verified provider spelling and maps its response back internally.
+          download_symbol = symbol if summary.get("acquisition_mode") == "batch_sip" else provider_symbol
+          raw = yahoo_daily_history_downloader(alias, start, end) if alias else downloader(download_symbol, start, end)
           response_received = isinstance(raw, pd.DataFrame)
           if not isinstance(raw, pd.DataFrame) or raw.empty: raise ValueError("invalid_response")
+          observed_at = datetime.now(timezone.utc).isoformat()
+          record.update({"retrieved_at": observed_at, "availability_policy": "observed_ingestion_only"})
           archive = data_root / "reference" / namespace / uuid.uuid4().hex / f"{symbol_key(symbol)}.parquet"
           _atomic_parquet(raw, archive, index=True)
           record.update({"archive": str(archive), "archive_sha256": hashlib.sha256(archive.read_bytes()).hexdigest(), "row_count": len(raw)})
           normalized = normalize_bars(raw, symbol, source, adjustment)
           normalized["date"] = pd.to_datetime(normalized["date"], errors="raise").dt.normalize()
           normalized[["adj_close", "dividends", "stock_splits"]] = pd.NA; normalized["actions_status"] = "unknown"
+          # Earliest availability of this acquired revision is our actual
+          # observation, not the historical bar date or a guessed publication.
+          normalized["retrieved_at"] = observed_at
+          normalized["available_at"] = observed_at
+          normalized["availability_policy"] = "observed_ingestion_only"
           _validate_normalized(normalized, start, end)
           record["actual_last_date"] = normalized["date"].max().date().isoformat()
           destination = data_root / "bars" / "daily" / f"provider={provider}" / f"namespace={namespace}" / f"symbol={symbol_key(symbol)}" / "bars.parquet"
@@ -295,6 +355,8 @@ def run_recovery(security_master: Path, data_root: Path, *, max_runtime_seconds:
             _validate_normalized(existing, existing["date"].min().date(), existing["date"].max().date())
           merged = normalized if existing is None else pd.concat([existing, normalized], ignore_index=True).drop_duplicates("date", keep="last").sort_values("date", ignore_index=True)
           _atomic_parquet(merged, destination); _publish_catalogue(data_root, symbol, destination, merged, provider=provider, namespace=namespace)
+          if mapped_queue:
+              _record_unverified_mapping_history(manifest, failure)
           record["status"] = "success"; summary["success"] += 1; consecutive = 0
         except (SymbolHistoryUnknown, SymbolRequestRejected) as exc:
           record.update({"status": "failed", "error_code": str(exc), "http_response_received": True})
