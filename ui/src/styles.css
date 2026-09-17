@@ -117,3 +117,10 @@ code, .numeric { font-variant-numeric: tabular-nums; }
 :is(.universe-form,.strategy-editor,.risk-policy-form,.data-source-form,.paper-form) label:has(> .required-mark)>:is(input,select,textarea){display:block;width:100%;margin-top:6px}
 :is(.universe-form,.strategy-editor,.risk-policy-form,.data-source-form,.paper-form) label>.field-error{display:block;margin-top:4px}
 input[aria-invalid='true'],select[aria-invalid='true'],textarea[aria-invalid='true']{border-color:#d92d20!important}
+/* Chart-local interval controls: selection changes the existing chart, not search. */
+.quote-intervals{display:flex;align-items:center;gap:4px;flex-shrink:0;padding:3px;border:1px solid #344557;border-radius:7px;background:#141e29}
+.quote-intervals button{min-height:32px;min-width:48px;padding:0 10px;border:0;border-radius:5px;background:transparent;color:#aebed0;font:inherit;font-size:.75rem;cursor:pointer}
+.quote-intervals button:hover{background:#263747;color:#fff}
+.quote-intervals button.is-active{color:#fff;background:#0f766e;font-weight:600}
+.quote-intervals button:focus-visible{outline:2px solid #5eead4;outline-offset:2px}
+@media(max-width:480px){.quote-panel>header{flex-wrap:wrap;padding-top:10px;padding-bottom:10px}.quote-intervals{margin-left:auto}.quote-intervals button{min-height:36px}}
