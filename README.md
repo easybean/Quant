@@ -12,6 +12,8 @@ PYTHONPATH=src .venv/bin/python -m quant_data.research_snapshot /path/to/snapsho
 
 `ready_for_review=true` 只表示可进入进一步审查，`qualified` 始终为 false；该检查不能证明行级 PIT 或覆盖完整性，也不解除真实回测门禁。
 
+五股Massive不可变候选副本、交易日覆盖、公司行为原始证据和日线成交/成本黄金路径的最新边界，见[回测基础推进](docs/tasks/BACKTEST-FOUNDATION-20260918.md)。这些新增工具不自动放行真实回测；当前仅合成验收任务可执行。
+
 ## 第一阶段数据管道
 
 ### Yahoo 每日更新
