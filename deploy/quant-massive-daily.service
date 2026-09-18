@@ -1,0 +1,19 @@
+[Unit]
+Description=Massive free grouped US daily acquisition (unqualified)
+Requires=mihomo.service
+After=network-online.target mihomo.service quant-security-catalogue.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/davidou/quant/app
+Environment=PYTHONPATH=/home/davidou/quant/app/src
+Environment=HTTP_PROXY=http://127.0.0.1:7890
+Environment=HTTPS_PROXY=http://127.0.0.1:7890
+Environment=NO_PROXY=localhost,127.0.0.1,::1
+ExecStart=/home/davidou/quant/venv/bin/python -m quant_data.massive_publish --data-root /home/davidou/quant/data --security-master /home/davidou/quant/data/metadata/security_master.parquet --credential-file /home/davidou/massivekey
+ExecStartPost=/home/davidou/quant/venv/bin/python -m quant_data.daily_quote_browser --data-root /home/davidou/quant/data
+ExecStartPost=/home/davidou/quant/venv/bin/python -m quant_data.sync_coverage --data-root /home/davidou/quant/data --security-master /home/davidou/quant/data/metadata/security_master.parquet
+TimeoutStartSec=30min
+Nice=10
+UMask=0077
+NoNewPrivileges=true

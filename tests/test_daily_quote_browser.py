@@ -48,6 +48,22 @@ def test_catalogue_search_and_one_raw_series_read_are_bounded(tmp_path):
     assert "path" not in json.dumps(result)
 
 
+def test_massive_appends_without_duplicate_symbol_or_replacing_history(tmp_path):
+    root = _root(tmp_path)
+    from quant_data.recovery_sync import _publish_catalogue
+    path = root / "bars/daily/provider=massive/namespace=massive-daily-v1/symbol=AAA-cb1ad211/bars.parquet"
+    path.parent.mkdir(parents=True)
+    frame = pd.DataFrame({"date": ["2024-01-05"], "open": [12], "high": [14], "low": [11], "close": [13], "volume": [150], "source": ["massive"], "adjustment_status": ["raw"]})
+    frame.to_parquet(path)
+    _publish_catalogue(root, "AAA", path, frame, provider="massive", namespace="massive-daily-v1")
+    items = search_us_daily_series("AAA", data_root=root)["items"]
+    assert len(items) == 1 and items[0]["last_date"] == "2024-01-05"
+    response = read_us_daily_bars(items[0]["series_id"], "2024-01-02", "2024-01-05", data_root=root)
+    assert response["returned_rows"] == 4
+    assert response["bars"][0]["close"] == 10.5
+    assert response["bars"][-1]["close"] == 13
+
+
 def test_browser_rejects_unbounded_or_unknown_requests(tmp_path):
     root = _root(tmp_path)
     with pytest.raises(DailyQuoteInputError):

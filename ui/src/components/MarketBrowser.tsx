@@ -73,7 +73,7 @@ export function MarketBrowser() {
   </div>
 }
 
-function sourceName(value: string) { return value === 'nasdaq_web_unadjusted' ? 'Nasdaq（历史）' : value === 'yfinance' ? 'Yahoo（更新）' : value }
+function sourceName(value: string) { return value === 'massive' ? 'Massive（日线）' : value === 'nasdaq_web_unadjusted' ? 'Nasdaq（历史）' : value === 'yfinance' ? 'Yahoo（更新）' : value }
 
 function CandleChart({ bars }: { bars: DailyBar[] }) {
   const hostRef = useRef<HTMLDivElement>(null)

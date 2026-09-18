@@ -23,7 +23,7 @@ def build_sync_coverage(data_root: Path, security_master: Path) -> dict[str, obj
     active = set(select_sync_symbols(master))
     historical = set(eligible.loc[eligible.status.fillna("").str.casefold().ne("active"), "symbol"].dropna().str.strip().str.upper()) - set(eligible.loc[eligible.status.fillna("").str.casefold().eq("active"), "symbol"].dropna().str.strip().str.upper())
     starts = _earliest_successful_request_starts(manifest / "records.jsonl")
-    for namespace in ("nasdaq-daily-recovery-v1", "alpaca-sip-recovery-v1", "alpaca-sip-symbol-mapping-recovery-v1"):
+    for namespace in ("nasdaq-daily-recovery-v1", "alpaca-sip-recovery-v1", "alpaca-sip-symbol-mapping-recovery-v1", "massive-daily-v1"):
         recovery_starts = _earliest_successful_request_starts(data_root / "manifests" / namespace / "records.jsonl")
         for symbol, start in recovery_starts.items():
             starts[symbol] = min(starts.get(symbol, start), start)
@@ -33,7 +33,7 @@ def build_sync_coverage(data_root: Path, security_master: Path) -> dict[str, obj
     acquired = {}
     for entry in catalogue["series"]:
         if (entry.get("provider"), entry.get("namespace")) in {
-            ("yfinance", "yahoo-daily-v1"), ("nasdaq", "nasdaq-daily-recovery-v1"), ("yfinance", "yahoo-symbol-recovery-v1"), ("alpaca", "alpaca-sip-recovery-v1"), ("alpaca", "alpaca-sip-symbol-mapping-recovery-v1")
+            ("yfinance", "yahoo-daily-v1"), ("nasdaq", "nasdaq-daily-recovery-v1"), ("yfinance", "yahoo-symbol-recovery-v1"), ("alpaca", "alpaca-sip-recovery-v1"), ("alpaca", "alpaca-sip-symbol-mapping-recovery-v1"), ("massive", "massive-daily-v1")
         }:
             acquired[entry["symbol"]] = max(acquired.get(entry["symbol"], ""), entry["last_date"])
     target = completed_session(datetime.now(timezone.utc))

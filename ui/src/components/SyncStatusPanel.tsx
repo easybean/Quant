@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { fetchSyncStatus, type SyncStatus } from '../syncStatusApi'
 
-const names: Record<string, string> = { 'alpaca-mapped': 'Alpaca 已核对代码映射', alpaca: 'Alpaca SIP 备源', yahoo: 'Yahoo', nasdaq: 'Nasdaq 备源' }
+const names: Record<string, string> = { massive: 'Massive 全市场日线', 'alpaca-mapped': 'Alpaca 已核对代码映射', alpaca: 'Alpaca SIP 备源', yahoo: 'Yahoo', nasdaq: 'Nasdaq 备源' }
 const states: Record<string, string> = { running: '运行中', partial: '仍有缺口', success: '本次请求成功', failed: '本次存在失败', endpoint_complete_audit_pending: '末日更新完成，历史审查未完成' }
 const time = (value?: string) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '未记录'
 const errors: Record<string, string> = { http_401: '凭证未获授权', http_403: '来源权限不足', http_429: '供应商限流，冷却后重试', response_date_outside_requested_window: '返回日期超出请求窗口', download_or_storage_failed: '下载或存储失败', download_or_validation_failed: '下载或数据校验失败', empty_history_unknown: '供应商返回空历史，原因未确定', symbol_request_rejected: '供应商拒绝该股票代码请求' }
@@ -21,6 +21,7 @@ export function SyncStatusPanel() {
       <p>总任务：{data.run_available ? states[data.run_status || ''] || data.run_status || '未知' : '任务摘要不可用'}。各来源记录可能来自不同批次，以各自行的结束时间为准。</p>
       {data.listing_evidence && <p>官方当前上市名单交叉核对（{time(data.listing_evidence.observed_at)}；目标日 {data.listing_evidence.target_date || '未知'}）：核对时的末日缺口中，{data.listing_evidence.present_endpoint_gaps} 个代码仍在当前名单；{data.listing_evidence.absent_endpoint_gaps_unknown} 个未在名单中找到，生命周期或代码映射待确认。后者不是“已退市”结论，也未从缺口中删除。</p>}
       {data.providers?.map(row => <div className="sync-provider-row" key={row.provider}><strong>{names[row.provider]}</strong><span>{states[row.status] || row.status} · {row.counts_available === false ? '阶段执行失败，未提供次数统计' : `尝试 ${row.attempted} / 成功 ${row.success} / 失败 ${row.failed}`}</span><small>结束：{time(row.finished_at)}{row.resume_after ? `；冷却至 ${time(row.resume_after)}` : ''}{row.last_error_code ? `；${errors[row.last_error_code] || '同步异常'}（${row.last_error_code}）` : ''}</small></div>)}
+      {data.providers?.filter(row => row.provider === 'massive').map(row => <p key="massive-coverage">Massive 本批复用已完成记录 {row.skipped ?? 0} 个；返回代码未精确匹配 {row.unmatched ?? 0} 个；计划内未返回 {row.missing ?? 0} 个。未匹配或未返回不等于退市，也未从补数计划删除。</p>)}
       <p className="data-note">末日达到目标不代表中间无缺口、证券身份已核验或可用于正式回测。官方新发现代码会追加进入采集清单，覆盖数字以实际清单更新时间为准；不能宣称已发现所有证券。个股最新日期在“行情浏览”查看。</p>
     </>}
   </section>

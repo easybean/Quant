@@ -26,6 +26,8 @@ Alpaca 队列中 5 个不符合本地 SIP 请求格式的代码导致批量下�
 
 目前未发现明确命名的 Massive/Polygon 凭证文件，已经请用户将免费 API key 存入 `/home/davidou/massivekey`（权限600，不进聊天/仓库）。没有 key 时不创建演示全市场结果，不启用 Massive 每日源、不宣称真实下载通过。
 
+后续更新：用户已提供凭证，真实接口、独立发布和每日任务已完成，最新证据见 [Massive交付](MASSIVE-20260918.md)。上述缺凭证状态仅记录本轮早期阶段，不再是当前阻碍。
+
 新源接入专项 8 passed（仅 mock 传输合同测试，不代表供应商实测）、py_compile 通过。集中 Review 修正超大整数、重复代码所有行隔离、URL 小写 false 及派生/诊断文件哈希血缘。完整包暂存 `/home/davidou/quant/releases/massive-daily-validation-20260918-01/quant_data`，服务器实际 CLI --help 成功；没有替换线上包。
 
 凭证准备后的真实验证命令：

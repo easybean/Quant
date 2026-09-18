@@ -67,3 +67,14 @@ def test_provider_phase_exception_preserves_other_evidence_without_inventing_cou
     yahoo = result["providers"][1]
     assert yahoo["counts_available"] is False and yahoo["attempted"] is None
     assert yahoo["last_error_code"] == "provider_phase_failed"
+
+
+def test_massive_summary_is_independent_and_does_not_expose_key(tmp_path):
+    folder = tmp_path / "manifests/yahoo-daily-v1"; folder.mkdir(parents=True)
+    (folder / "coverage.json").write_text(json.dumps({"schema_version": "yahoo-sync-coverage-v1", "active_symbols": 2, "endpoint_current": 1, "needs_update": 1, "historical_only_symbols": 0}))
+    source = tmp_path / "manifests/massive-daily-v1"; source.mkdir()
+    (source / "latest.json").write_text(json.dumps({"schema_version": "massive-daily-publication-v1", "status": "success", "success": 1, "failed": 0, "attempted": 1, "skipped": 0, "unmatched": 1, "missing": 1, "credential_file": "/secret"}))
+    result = sync_status_payload(tmp_path)
+    assert result["providers"][0]["provider"] == "massive"
+    assert result["providers"][0]["success"] == 1
+    assert "/secret" not in json.dumps(result)

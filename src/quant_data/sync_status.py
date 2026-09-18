@@ -66,6 +66,14 @@ def sync_status_payload(data_root: str | Path | None = None) -> dict:
     except (OSError, ValueError):
         response.update({"run_available": False, "providers": []})
     try:
+        row = _read(root, "manifests/massive-daily-v1/latest.json", "massive-daily-publication-v1")
+        response["providers"].append({"provider": "massive", "status": _text(row.get("status")), "counts_available": True,
+            "success": _count(row, "success"), "failed": _count(row, "failed"), "attempted": _count(row, "attempted"),
+            "skipped": _count(row, "skipped"), "unmatched": _count(row, "unmatched"), "missing": _count(row, "missing"),
+            "last_error_code": _text(row.get("last_error_code")), "finished_at": _text(row.get("finished_at")), "resume_after": None})
+    except (OSError, ValueError):
+        pass
+    try:
         evidence = _read(root, "catalogue/current-listing-gap-evidence-v1.json", "current-listing-gap-evidence-v1")
         items = evidence.get("items")
         if not isinstance(items, list) or not all(isinstance(item, dict) for item in items):
