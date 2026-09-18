@@ -49,7 +49,7 @@ class Submission:
             raise JobInputError("kind must be research or backtest")
         if kind == "research" and operation not in {"record_metadata", "factor_evaluation"}:
             raise JobInputError("only research operations record_metadata and factor_evaluation are available")
-        if kind == "backtest" and operation != "synthetic_daily_limit":
+        if kind == "backtest" and operation not in {"synthetic_daily_limit", "synthetic_signal_daily"}:
             raise JobInputError("formal backtest is blocked; only P3-03 synthetic_daily_limit acceptance is available")
         strategy, parameters = value.get("strategy"), value.get("parameters")
         if not isinstance(strategy, Mapping) or not isinstance(parameters, Mapping):
@@ -62,7 +62,13 @@ class Submission:
         _json_object(parameters, "parameters")
         if kind == "research" and operation == "factor_evaluation":
             _validate_factor_evaluation(strategy, parameters, snapshot)
-        if kind == "backtest":
+        if kind == "backtest" and operation == "synthetic_signal_daily":
+            try:
+                from .signal_backtest import validate_job
+                validate_job(parameters, strategy, snapshot)
+            except (ValueError, TypeError, KeyError) as exc:
+                raise JobInputError(f"signal backtest blocked: {exc}") from exc
+        elif kind == "backtest":
             _validate_synthetic_backtest(strategy, parameters, snapshot)
         return cls(kind, operation, dict(strategy), dict(parameters), snapshot.strip(), version.strip(), key.strip())
 
@@ -223,8 +229,12 @@ class JobStore:
         staging = self.artifacts / f".staging-{row['id']}-{uuid4().hex}"
         staging.mkdir(parents=True)
         if row["kind"] == "backtest":
-            from .backtest import request_from_job, run_synthetic_daily_limit
-            payload = run_synthetic_daily_limit(request_from_job(json.loads(row["strategy_json"]), json.loads(row["parameters_json"]), row["data_snapshot"]))
+            if row["operation"] == "synthetic_signal_daily":
+                from .signal_backtest import run_from_job
+                payload = run_from_job(json.loads(row["parameters_json"]), json.loads(row["strategy_json"]), row["data_snapshot"])
+            else:
+                from .backtest import request_from_job, run_synthetic_daily_limit
+                payload = run_synthetic_daily_limit(request_from_job(json.loads(row["strategy_json"]), json.loads(row["parameters_json"]), row["data_snapshot"]))
             payload.update({"job_id": row["id"], "code_version": row["code_version"], "created_at": row["created_at"]})
         elif row["operation"] == "factor_evaluation":
             from .factor_jobs import validate_request

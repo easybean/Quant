@@ -75,6 +75,7 @@ export type Job = { id: string; kind: 'research' | 'backtest'; operation: string
 export type Experiment = { id: string; job_id: string; strategy: Record<string, unknown>; parameters: Record<string, unknown>; data_snapshot: string; code_version: string; status: string; artifacts: Job['artifacts']; created_at: string }
 export type FactorResearchAvailability = { available: boolean; snapshots: string[]; message: string }
 export type BacktestAvailability = {
+  signal_acceptance?: { available: boolean; operation: string; dataset_version: string; asset_pool_version: string; calendar_version: string; scope: string; parameters: Record<string, unknown> }
   formal_backtest_available: boolean
   formal_backtest_reason: string
   synthetic_acceptance: {

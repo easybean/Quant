@@ -1,0 +1,79 @@
+{
+  "jobs": [
+    "03499d3a-b4b7-4bf6-bd92-618fc21f3e8c",
+    "ecbd41fa-becf-4eca-bd50-a669462f1419"
+  ],
+  "metrics": [
+    {
+      "fees": "2",
+      "fill_count": 2,
+      "free_cash": "28",
+      "initial_cash": "1000",
+      "order_count": 3,
+      "terminal_equity": "853",
+      "total_pnl": "-147.0000000000000000000000000",
+      "total_return_pct": "-14.7000000000000000000000000",
+      "unrealized_pnl": "-145.0000000000000000000000000"
+    },
+    {
+      "fees": "2",
+      "fill_count": 2,
+      "free_cash": "958",
+      "initial_cash": "1000",
+      "order_count": 3,
+      "terminal_equity": "958",
+      "total_pnl": "-42",
+      "total_return_pct": "-4.200",
+      "unrealized_pnl": "0"
+    }
+  ],
+  "fills": [
+    [
+      {
+        "day": "2024-01-03",
+        "fee_usd": "1",
+        "order_id": "signal-1",
+        "price": "90",
+        "quantity": "10",
+        "side": "buy"
+      },
+      {
+        "day": "2024-01-09",
+        "fee_usd": "1",
+        "order_id": "signal-5",
+        "price": "70",
+        "quantity": "1",
+        "side": "buy"
+      }
+    ],
+    [
+      {
+        "day": "2024-01-08",
+        "fee_usd": "1",
+        "order_id": "signal-4",
+        "price": "80",
+        "quantity": "8",
+        "side": "buy"
+      },
+      {
+        "day": "2024-01-10",
+        "fee_usd": "1",
+        "order_id": "signal-6",
+        "price": "75",
+        "quantity": "-8",
+        "side": "sell"
+      }
+    ]
+  ],
+  "comparison": {
+    "terminal_equity": "105",
+    "total_pnl": "105",
+    "total_return_pct": "10.5",
+    "fees": "0"
+  },
+  "required_validation": "passed",
+  "report_curve": "passed",
+  "mobile_no_overflow": "passed",
+  "formal_gate": "blocked",
+  "pageErrors": []
+}

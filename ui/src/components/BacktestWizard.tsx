@@ -3,8 +3,9 @@ import { idempotencyKey } from '../idempotency'
 import { AlertCircle, CheckCircle2, CircleAlert, LoaderCircle, Play, RefreshCw, ShieldAlert } from 'lucide-react'
 import { BacktestAvailability, Job, fetchBacktestAvailability, fetchJob, submitBacktest } from '../api'
 import { BacktestDataReadiness } from './BacktestDataReadiness'
+import { SignalBacktest } from './SignalBacktest'
 
-type Mode = 'formal' | 'synthetic'
+type Mode = 'formal' | 'synthetic' | 'signal'
 type Template = 'buy_and_hold' | 'dual_moving_average'
 
 const terminal = new Set(['succeeded', 'failed', 'cancelled'])
@@ -100,10 +101,11 @@ export function BacktestWizard() {
     {error ? <section className="empty-state wide"><AlertCircle size={24}/><strong>无法继续</strong><p>{error}</p><button className="detail-action data-retry" onClick={() => setAttempt(value => value + 1)}><RefreshCw size={15}/>重新读取门禁</button></section> : !availability ? <section className="empty-state wide"><LoaderCircle size={24} className="animate-spin"/><strong>正在读取回测能力</strong><p>只读取服务端能力登记，不会扫描行情或创建任务。</p></section> : <>
       {mode === 'formal' && <BacktestDataReadiness />}
       <div className="wizard-mode-grid">
+        <button type="button" className={`wizard-mode ${mode === 'signal' ? 'is-active' : ''}`} onClick={() => setMode('signal')}><Play size={19}/><span><strong>策略驱动闭环验收</strong><small>合成数据；信号实际驱动次日买卖与净值</small></span></button>
         <button type="button" className={`wizard-mode ${mode === 'formal' ? 'is-active' : ''}`} onClick={() => { setMode('formal'); setAcknowledged(false); setJob(null) }}><ShieldAlert size={19}/><span><strong>正式美股日线回测</strong><small>当前受 P3-03A 数据与成本门禁阻断</small></span></button>
         <button type="button" className={`wizard-mode ${mode === 'synthetic' ? 'is-active' : ''}`} onClick={() => { setMode('synthetic'); setJob(null) }}><CheckCircle2 size={19}/><span><strong>合成验收样例</strong><small>仅验证已验收的限价部分成交路径</small></span></button>
       </div>
-      <section className="wizard-shell">
+      {mode === 'signal' ? <SignalBacktest availability={availability} /> : <section className="wizard-shell">
         <div className="wizard-steps" aria-label="回测配置步骤">
           <WizardStep number="1" title="策略" text="选定版本化模板" />
           <WizardStep number="2" title="股票池" text="固定快照与范围" />
@@ -120,7 +122,7 @@ export function BacktestWizard() {
           {mode === 'synthetic' ? <button className="wizard-submit" type="button" disabled={!acknowledged || submitting || Boolean(job && !terminal.has(job.status))} onClick={submit}>{submitting || (job && !terminal.has(job.status)) ? <LoaderCircle className="animate-spin" size={17}/> : <Play size={17}/>} {submitting ? '正在提交…' : job && !terminal.has(job.status) ? '任务运行中…' : '提交合成验收任务'}</button> : <button className="wizard-submit blocked" type="button" disabled><ShieldAlert size={17}/>正式回测受门禁阻断</button>}
           {job ? <section className={`wizard-job ${job.status}`}><strong>{job.status === 'succeeded' ? '验收任务已发布' : job.status === 'failed' ? '任务失败' : job.status === 'cancelled' ? '任务已取消' : `任务${job.status === 'queued' ? '已排队' : '运行中'}`}</strong><p>任务 ID：{job.id}</p>{job.failure ? <p className="task-failure">{job.failure.code}：{job.failure.message}</p> : <p>{job.status === 'succeeded' ? '结果产物已原子发布，可在“回测任务”查看状态；它只适用于合成验收范围。' : '浏览器关闭后任务仍会继续；此处每 1.5 秒刷新状态。'}</p>}</section> : null}
         </div>
-      </section>
+      </section>}
     </>}
   </div>
 }

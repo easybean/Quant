@@ -34,7 +34,9 @@ def public_availability() -> dict[str, Any]:
     accounts, or market-data inventory; the qualified synthetic fixture is the
     only submit-capable option until P3-03A is completed.
     """
+    from .signal_backtest import public_availability as signal_availability
     return {
+        "signal_acceptance": signal_availability(),
         "formal_backtest_available": False,
         "formal_backtest_reason": (
             "正式美股日线回测未开放：P3-03A 尚未发布具备稳定身份、原始价、可用时点、"

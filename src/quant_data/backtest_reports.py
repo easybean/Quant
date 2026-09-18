@@ -151,10 +151,20 @@ def _artifact_path(store: JobStore, job_id: str) -> Path:
 
 
 def _is_synthetic_report_job(job: Mapping[str, Any]) -> bool:
-    return job.get("kind") == "backtest" and job.get("operation") == "synthetic_daily_limit" and job.get("status") == "succeeded"
+    return job.get("kind") == "backtest" and job.get("operation") in {"synthetic_daily_limit", "synthetic_signal_daily"} and job.get("status") == "succeeded"
 
 
 def _validate_payload(job: Mapping[str, Any], payload: Mapping[str, Any]) -> None:
+    if job.get("operation") == "synthetic_signal_daily":
+        from .signal_backtest import run_from_job
+        try:
+            expected = run_from_job(job["parameters"], job["strategy"], job["data_snapshot"])
+        except (ValueError, TypeError, KeyError) as exc:
+            raise BacktestReportError("signal artifact input contract is invalid") from exc
+        expected.update({"job_id": job["id"], "code_version": job["code_version"], "created_at": job["created_at"]})
+        if dict(payload) != expected:
+            raise BacktestReportError("signal artifact does not match its fixed input and reconciled replay")
+        return
     if payload.get("schema_version") != BACKTEST_SCHEMA_VERSION or payload.get("status") != "succeeded_synthetic_only":
         raise BacktestReportError("artifact is not the accepted synthetic backtest report")
     if payload.get("job_id") != job.get("id") or payload.get("code_version") != job.get("code_version") or payload.get("created_at") != job.get("created_at"):
@@ -208,6 +218,8 @@ def _validate_payload(job: Mapping[str, Any], payload: Mapping[str, Any]) -> Non
 
 
 def _view(source: _Source) -> dict[str, Any]:
+    if source.job.get("operation") == "synthetic_signal_daily":
+        return _signal_view(source)
     job, report = source.job, source.payload
     ledger, execution, provenance = (_mapping(report, name) for name in ("ledger", "execution", "provenance"))
     bars, bars_sha256 = _bars_and_hash(job)
@@ -249,6 +261,29 @@ def _view(source: _Source) -> dict[str, Any]:
             "所有金额仅适用于固定合成 ACME 验收输入，不是历史收益、账户余额或可交易结果。",
         ],
         "created_at": job.get("created_at"),
+    }
+
+
+def _signal_view(source: _Source) -> dict[str, Any]:
+    job, report = source.job, source.payload
+    ledger, provenance, execution = report["ledger"], report["provenance"], report["execution"]
+    curve = report["equity_curve"]
+    engine = report["engine"]
+    mark, quantity = Decimal(ledger["mark_price"]), Decimal(ledger["position"])
+    return {
+        "schema_version": REPORT_SCHEMA_VERSION, "job_id": job["id"], "available": True,
+        "label": "合成策略闭环验收（非真实历史收益）",
+        "artifact": {"name": _ARTIFACT_NAME, "sha256": source.artifact_sha256, "sha256_status": "computed_read_time_only", "report_hash": report["report_hash"], "report_hash_verified": True},
+        "contract": {"dataset_version": provenance["dataset_version"], "asset_pool_version": provenance["asset_pool_version"],
+                     "calendar_version": provenance["calendar_version"], "price_basis": "raw", "currency": "USD",
+                     "date_range": {"start": curve[0]["day"], "end": curve[-1]["day"]}, "bars_sha256": provenance["bars_sha256"],
+                     "initial_cash": ledger["initial_cash"], "corporate_actions": "not_applicable", "engine_version": engine["version"],
+                     "engine_contract": engine, "execution_contract": execution},
+        "versions": {"backtest_schema": report["schema_version"], "engine": engine, "code_version": job["code_version"], "input_fingerprint": _input_fingerprint(job), "strategy": job["strategy"]},
+        "metrics": report["metrics"],
+        "holdings": [{"symbol": "ACME", "quantity": ledger["position"], "mark_price": ledger["mark_price"], "market_value": _string(quantity * mark), "price_basis": "raw"}],
+        "fills": report["fills"], "execution": execution, "warnings": report["limitations"],
+        "equity_curve": curve, "signals": report["signals"], "orders": report["orders"], "created_at": job["created_at"],
     }
 
 

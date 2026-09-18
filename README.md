@@ -14,6 +14,8 @@ PYTHONPATH=src .venv/bin/python -m quant_data.research_snapshot /path/to/snapsho
 
 五股Massive不可变候选副本、交易日覆盖、公司行为原始证据和日线成交/成本黄金路径的最新边界，见[回测基础推进](docs/tasks/BACKTEST-FOUNDATION-20260918.md)。这些新增工具不自动放行真实回测；当前仅合成验收任务可执行。
 
+2026-09-19新增“历史回测 → 新建回测 → 策略驱动闭环验收”：买入持有/双均线的收盘信号实际驱动下一交易日DAY限价买卖、成本、每日净值和报告。它使用固定ACME合成样本，不是股票历史收益；真实行情门禁保持阻断。见[策略闭环验收](docs/tasks/SIGNAL-BACKTEST-20260919.md)。
+
 ## 第一阶段数据管道
 
 ### Yahoo 每日更新
