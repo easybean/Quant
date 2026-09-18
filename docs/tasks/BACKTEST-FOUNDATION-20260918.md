@@ -18,7 +18,7 @@
 - 实现Agent成交/账务黄金21 passed；review修复开盘文案、小数vendor volume、成本基础/费用不变量。主控把roundtrip卖出改为下一交易日，成交专项14 passed。
 - release `/home/davidou/quant/releases/backtest-foundation-20260918-01`：服务器compile后仅安装3个新增工具，不替换API/UI、不重启服务、不改真实回测/因子门禁、不停止全量补数。回滚为停止调用新增工具，保留原数据和证据，无数据库迁移。
 
-最后追加分红应收模块，总共4个新增工具；日线成交及分红结算均限定USD，无FX证据的其他币种拒绝，entitlement book必须不可变tuple、事件ID无前后空白。最后Agent成本/分红/旧账务31 passed，服务器四个新增工具专项39 passed。最终模块原子更新（新增分红文件首次安装），未重启API/UI；固定副本SHA逐项核验通过，全量补数/逐码/日更/前瞻证据留存timer均enabled。首次29 passed和最终39 passed不是独立69项覆盖。
+最后追加分红应收模块，总共4个新增工具；日线成交及分红结算均限定USD，无FX证据的其他币种拒绝，entitlement book必须不可变tuple、事件ID无前后空白。最后Agent成本/分红/旧账务31 passed，服务器四个新增工具专项39 passed。最终模块原子更新（新增分红文件首次安装），未重启API/UI；固定副本SHA逐项核验通过，全量补数/逐码/日更/前瞻证据留存timer均enabled。首次29 passed和最终39 passed有重叠，不相加为独立覆盖。
 
 ## 未完成及下一验收
 

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { idempotencyKey } from '../idempotency'
 import { AlertCircle, CheckCircle2, CircleAlert, LoaderCircle, Play, RefreshCw, ShieldAlert } from 'lucide-react'
 import { BacktestAvailability, Job, fetchBacktestAvailability, fetchJob, submitBacktest } from '../api'
+import { BacktestDataReadiness } from './BacktestDataReadiness'
 
 type Mode = 'formal' | 'synthetic'
 type Template = 'buy_and_hold' | 'dual_moving_average'
@@ -14,7 +15,7 @@ function syntheticBody(template: Template, availability: BacktestAvailability): 
     ? { symbol: 'ACME', start_date: '2024-01-02' }
     : { symbol: 'ACME', fast_window: 2, slow_window: 3 }
   return {
-    kind: 'backtest', operation: fixture.operation, data_snapshot: fixture.dataset_version, code_version: 'p3-04-wizard-v1',
+    kind: 'backtest', operation: fixture.operation, data_snapshot: fixture.dataset_version, code_version: 'p3-04-wizard-v2-reference-accounting',
     strategy: {
       template,
       parameters: strategyParameters,
@@ -97,6 +98,7 @@ export function BacktestWizard() {
   return <div className="backtest-wizard">
     <section className="page-heading"><div><p className="eyebrow">历史回测 · 受控提交</p><h1>新建回测</h1><p>先检查策略、数据、执行能力与成本。正式回测未验收时不会创建任务或生成虚构结果。</p></div><span className="static-boundary">持久化任务 · 提交前门禁</span></section>
     {error ? <section className="empty-state wide"><AlertCircle size={24}/><strong>无法继续</strong><p>{error}</p><button className="detail-action data-retry" onClick={() => setAttempt(value => value + 1)}><RefreshCw size={15}/>重新读取门禁</button></section> : !availability ? <section className="empty-state wide"><LoaderCircle size={24} className="animate-spin"/><strong>正在读取回测能力</strong><p>只读取服务端能力登记，不会扫描行情或创建任务。</p></section> : <>
+      {mode === 'formal' && <BacktestDataReadiness />}
       <div className="wizard-mode-grid">
         <button type="button" className={`wizard-mode ${mode === 'formal' ? 'is-active' : ''}`} onClick={() => { setMode('formal'); setAcknowledged(false); setJob(null) }}><ShieldAlert size={19}/><span><strong>正式美股日线回测</strong><small>当前受 P3-03A 数据与成本门禁阻断</small></span></button>
         <button type="button" className={`wizard-mode ${mode === 'synthetic' ? 'is-active' : ''}`} onClick={() => { setMode('synthetic'); setJob(null) }}><CheckCircle2 size={19}/><span><strong>合成验收样例</strong><small>仅验证已验收的限价部分成交路径</small></span></button>

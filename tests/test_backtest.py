@@ -6,7 +6,7 @@ import pytest
 from quant_data.backtest import (
     AssetPool, BacktestBlocked, BacktestRequest, DailyLimitBar,
     SYNTHETIC_CALENDAR_VERSION, SYNTHETIC_DATASET_VERSION,
-    SYNTHETIC_UNIVERSE_VERSION, run_synthetic_daily_limit,
+    SYNTHETIC_UNIVERSE_VERSION, public_availability, run_synthetic_daily_limit,
 )
 from quant_data.strategies import DataRequirements, define_strategy
 from quant_data.time_model import MarketEvent
@@ -47,6 +47,10 @@ def test_two_templates_rerun_same_version_and_match_p2_05_partial_fill_golden(te
     assert first["ledger"] == {"initial_cash": "1000", "free_cash": "599", "position": "4", "mark_price": "102", "unrealized_pnl": "8", "fees": "1", "total_pnl": "7"}
     assert first["execution"]["cancelled_quantity"] == "6"
     assert first["engine"]["version"] == "1.221.0"
+    assert first["engine"]["execution_implementation"] == "reference-accounting-v1"
+    assert first["engine"]["reference_runner"] == "NautilusTrader"
+    assert first["engine"]["reference_runner_version"] == "1.221.0"
+    assert first["engine"]["runner_invoked"] is False
 
 
 @pytest.mark.parametrize("changes, message", [
@@ -64,3 +68,11 @@ def test_real_pool_and_non_explicit_corporate_actions_are_blocked():
         AssetPool("real-pool-v1", "real", ("ACME",), "complete")
     with pytest.raises(BacktestBlocked, match="corporate_actions"):
         AssetPool(SYNTHETIC_UNIVERSE_VERSION, "synthetic", ("ACME",), "representative")
+
+
+def test_public_availability_does_not_claim_the_reference_runner_was_invoked():
+    engine = public_availability()["synthetic_acceptance"]
+    assert engine["engine_version"] == "1.221.0"
+    assert engine["execution_implementation"] == "reference-accounting-v1"
+    assert engine["reference_runner"] == "NautilusTrader"
+    assert engine["runner_invoked"] is False

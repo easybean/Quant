@@ -19,6 +19,8 @@ from typing import Any, Mapping, Sequence
 from .backtest import (
     BACKTEST_SCHEMA_VERSION,
     NAUTILUS_VERSION,
+    REFERENCE_ACCOUNTING_IMPLEMENTATION,
+    REFERENCE_RUNNER,
     SYNTHETIC_CALENDAR_VERSION,
     SYNTHETIC_DATASET_VERSION,
     SYNTHETIC_UNIVERSE_VERSION,
@@ -76,7 +78,7 @@ def compare_reports(store: JobStore, left_job_id: str, right_job_id: str) -> dic
         ("数据快照", "contract.dataset_version"),
         ("资产池", "contract.asset_pool_version"),
         ("日历", "contract.calendar_version"),
-        ("回测引擎", "contract.engine_version"),
+        ("回测引擎合同", "contract.engine_contract"),
         ("价格口径", "contract.price_basis"),
         ("资金币种", "contract.currency"),
         ("日期区间", "contract.date_range"),
@@ -167,8 +169,9 @@ def _validate_payload(job: Mapping[str, Any], payload: Mapping[str, Any]) -> Non
     }
     if any(provenance.get(key) != value for key, value in expected_provenance.items()):
         raise BacktestReportError("artifact provenance is not the accepted synthetic contract")
-    if engine.get("version") != NAUTILUS_VERSION or execution.get("fee_model") != "USD 1 once on first fill":
+    if engine.get("name") != REFERENCE_RUNNER or engine.get("version") != NAUTILUS_VERSION or execution.get("fee_model") != "USD 1 once on first fill":
         raise BacktestReportError("artifact engine or currency contract is not accepted")
+    _validate_engine_provenance(engine)
     for key in ("initial_cash", "free_cash", "position", "mark_price", "unrealized_pnl", "fees", "total_pnl"):
         _decimal(ledger.get(key), f"ledger.{key}")
     fills = payload.get("fills")
@@ -229,6 +232,7 @@ def _view(source: _Source) -> dict[str, Any]:
             "initial_cash": _string(initial),
             "corporate_actions": provenance["corporate_actions"],
             "engine_version": _mapping(report, "engine")["version"],
+            "engine_contract": _engine_contract(_mapping(report, "engine")),
             "execution_contract": _execution_contract(execution),
         },
         "versions": {"backtest_schema": report["schema_version"], "engine": _public_engine(_mapping(report, "engine")), "code_version": job["code_version"], "input_fingerprint": _input_fingerprint(job), "strategy": job["strategy"]},
@@ -282,6 +286,43 @@ def _execution_contract(execution: Mapping[str, Any]) -> dict[str, Any]:
     if any(not isinstance(value, str) or not value for value in values.values()):
         raise BacktestReportError("artifact has incomplete execution contract")
     return values
+
+
+def _validate_engine_provenance(engine: Mapping[str, Any]) -> None:
+    """Accept immutable legacy reports, but fail closed for partial new claims."""
+    provenance_keys = (
+        "execution_implementation", "reference_runner",
+        "reference_runner_version", "runner_invoked",
+    )
+    present = [key in engine for key in provenance_keys]
+    if not any(present):
+        return
+    if not all(present):
+        raise BacktestReportError("artifact engine provenance is incomplete")
+    if (
+        engine.get("execution_implementation") != REFERENCE_ACCOUNTING_IMPLEMENTATION
+        or engine.get("reference_runner") != REFERENCE_RUNNER
+        or engine.get("reference_runner_version") != NAUTILUS_VERSION
+        or engine.get("runner_invoked") is not False
+    ):
+        raise BacktestReportError("artifact engine provenance is not accepted")
+
+
+def _engine_contract(engine: Mapping[str, Any]) -> dict[str, Any]:
+    """Return comparison-safe execution identity without rewriting old artifacts."""
+    if "execution_implementation" not in engine:
+        return {
+            "execution_implementation": "legacy-unknown",
+            "engine_version": engine["version"],
+            "runner_invoked": False,
+        }
+    return {
+        "execution_implementation": engine["execution_implementation"],
+        "engine_version": engine["version"],
+        "reference_runner": engine["reference_runner"],
+        "reference_runner_version": engine["reference_runner_version"],
+        "runner_invoked": engine["runner_invoked"],
+    }
 
 
 def _input_fingerprint(job: Mapping[str, Any]) -> str:
@@ -339,5 +380,24 @@ def _version_differences(left: Mapping[str, Any], right: Mapping[str, Any]) -> d
 
 
 def _public_engine(engine: Mapping[str, Any]) -> dict[str, Any]:
-    """Expose version identity, not a source field that could become a path."""
-    return {"name": engine.get("name"), "version": engine.get("version"), "verified_scope": "P2-05 synthetic daily buy-limit partial-fill/cancel"}
+    """Expose truthfully-labelled provenance while preserving old artifacts."""
+    contract = _engine_contract(engine)
+    if contract["execution_implementation"] == "legacy-unknown":
+        return {
+            "name": "参考账务验收程序（旧报告）",
+            "version": "unknown",
+            "execution_implementation": "legacy-unknown",
+            "reference_runner": engine.get("name"),
+            "reference_runner_version": engine.get("version"),
+            "runner_invoked": False,
+            "verified_scope": "P2-05 synthetic daily buy-limit partial-fill/cancel",
+        }
+    return {
+        "name": "参考账务验收程序",
+        "version": contract["execution_implementation"],
+        "execution_implementation": contract["execution_implementation"],
+        "reference_runner": contract["reference_runner"],
+        "reference_runner_version": contract["reference_runner_version"],
+        "runner_invoked": False,
+        "verified_scope": "P2-05 synthetic daily buy-limit partial-fill/cancel",
+    }

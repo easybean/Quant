@@ -31,6 +31,7 @@ from .paper_ledger import PaperLedgerInputError, PaperLedgerStore
 from .data_source_drafts import DataSourceDraftInputError, DataSourceDraftStore
 from .security_catalog import SecurityCatalogueStore
 from .sync_status import sync_status_payload
+from .backtest_readiness import public_readiness
 
 _DEFAULT_ORIGINS = ("http://127.0.0.1:5173", "http://192.168.1.132:8510")
 _SCHEMA_VERSION = "v1"
@@ -185,6 +186,10 @@ def create_app() -> FastAPI:
     @app.get("/api/v1/backtests/availability")
     def backtest_availability() -> dict[str, object]:
         return backtest_public_availability()
+
+    @app.get("/api/v1/backtests/data-readiness")
+    def backtest_data_readiness() -> dict[str, object]:
+        return public_readiness()
 
     @app.get("/api/v1/backtests/reports")
     def backtest_reports(limit: int = Query(default=50, ge=1, le=100)) -> dict[str, object]:

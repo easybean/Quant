@@ -1,0 +1,18 @@
+{
+  "seven_checks": "passed",
+  "failure_retry": "passed",
+  "mobile_no_overflow": "passed",
+  "formal_gate": "blocked",
+  "synthetic_job": "682b2dd3-26dc-46a8-a849-f4f20a136bb7",
+  "new_engine": {
+    "name": "参考账务验收程序",
+    "version": "reference-accounting-v1",
+    "execution_implementation": "reference-accounting-v1",
+    "reference_runner": "NautilusTrader",
+    "reference_runner_version": "1.221.0",
+    "runner_invoked": false,
+    "verified_scope": "P2-05 synthetic daily buy-limit partial-fill/cancel"
+  },
+  "legacy_reports": 3,
+  "pageErrors": []
+}

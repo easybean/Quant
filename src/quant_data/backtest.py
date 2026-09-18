@@ -23,6 +23,8 @@ NAUTILUS_VERSION = "1.221.0"
 SYNTHETIC_DATASET_VERSION = "synthetic-us-daily-v1"
 SYNTHETIC_UNIVERSE_VERSION = "synthetic-us-equity-pool-v1"
 SYNTHETIC_CALENDAR_VERSION = "synthetic-nyse-calendar-v1"
+REFERENCE_ACCOUNTING_IMPLEMENTATION = "reference-accounting-v1"
+REFERENCE_RUNNER = "NautilusTrader"
 
 
 def public_availability() -> dict[str, Any]:
@@ -45,6 +47,10 @@ def public_availability() -> dict[str, Any]:
             "asset_pool_version": SYNTHETIC_UNIVERSE_VERSION,
             "calendar_version": SYNTHETIC_CALENDAR_VERSION,
             "engine_version": NAUTILUS_VERSION,
+            "execution_implementation": REFERENCE_ACCOUNTING_IMPLEMENTATION,
+            "reference_runner": REFERENCE_RUNNER,
+            "reference_runner_version": NAUTILUS_VERSION,
+            "runner_invoked": False,
             "scope": "仅 P2-05 合成美股日线限价部分成交/撤余单验收；不代表真实回测。",
             "limitations": [
                 "仅一只合成证券 ACME，固定三根日线与固定时间范围",
@@ -162,7 +168,18 @@ def run_synthetic_daily_limit(request: BacktestRequest) -> dict[str, Any]:
     report = {
         "schema_version": BACKTEST_SCHEMA_VERSION,
         "status": "succeeded_synthetic_only",
-        "engine": {"name": "NautilusTrader", "version": NAUTILUS_VERSION, "verified_path": "P2-05 synthetic daily buy-limit partial-fill/cancel"},
+        # ``name``/``version`` are retained for the established request and
+        # artifact contract.  This function is a reference ledger, however;
+        # it does not instantiate or invoke NautilusTrader at runtime.
+        "engine": {
+            "name": REFERENCE_RUNNER,
+            "version": NAUTILUS_VERSION,
+            "execution_implementation": REFERENCE_ACCOUNTING_IMPLEMENTATION,
+            "reference_runner": REFERENCE_RUNNER,
+            "reference_runner_version": NAUTILUS_VERSION,
+            "runner_invoked": False,
+            "verified_path": "P2-05 synthetic daily buy-limit partial-fill/cancel",
+        },
         "provenance": {"dataset_version": request.dataset_version, "asset_pool_version": request.asset_pool.version, "calendar_version": request.calendar_version, "price_basis": "raw", "corporate_actions": "not_applicable"},
         "execution": {"order_type": "limit", "side": "buy", "limit_price": str(request.limit_price), "requested_quantity": str(request.requested_quantity), "filled_quantity": str(position), "cancelled_quantity": str(remaining), "fill_time": "per supplied daily synthetic bar", "volume_constraint": "explicit caller-declared fill_quantity only", "fee_model": "USD 1 once on first fill", "slippage": "unsupported"},
         "ledger": {"initial_cash": str(request.initial_cash), "free_cash": str(cash), "position": str(position), "mark_price": str(mark), "unrealized_pnl": str(unrealized), "fees": str(fees), "total_pnl": str(unrealized - fees)},
