@@ -355,9 +355,14 @@ def _previous_unmatched(records: Path, completion_key: str) -> set[str]:
 
 
 def publish_massive_daily(security_master: Path, data_root: Path, credential_file: Path | None = None, *, date_: date | None = None,
-                          snapshot: Path | None = None, now: datetime | None = None,
+                          snapshot: Path | None = None, now: datetime | None = None, symbols: set[str] | None = None,
                           capture: Callable[[Path, date, Path], dict[str, Any]] = capture_massive_daily) -> dict[str, Any]:
-    """Capture at most once, then publish exact active-symbol matches from one day."""
+    """Capture at most once, then publish exact active-symbol matches from one day.
+
+    ``symbols`` is an optional explicit backfill scope.  It limits filesystem
+    publication work only; it does not make a partial grouped response a
+    complete-day publication or update the full-day completion pointer.
+    """
     clock = now or _now()
     if clock.tzinfo is None:
         raise MassivePublishError("now_must_be_timezone_aware")
@@ -387,6 +392,10 @@ def publish_massive_daily(security_master: Path, data_root: Path, credential_fil
             if _sha256(master_path) != master_sha:
                 raise ValueError("security_master_changed_during_read")
             active = set(select_sync_symbols(master))
+            if symbols is not None:
+                if not isinstance(symbols, set) or any(not isinstance(symbol, str) or not symbol.strip() or symbol != symbol.strip().upper() for symbol in symbols):
+                    raise MassivePublishError("publication_symbols_invalid")
+                active &= symbols
         except (OSError, ValueError, ImportError) as exc:
             raise MassivePublishError("security_master_invalid") from exc
         if snapshot is None:
@@ -398,23 +407,28 @@ def publish_massive_daily(security_master: Path, data_root: Path, credential_fil
                     captured = capture(root, target, Path(credential_file))
                 except MassiveDailyError as exc:
                     summary.update({"status": "failed", "last_error_code": str(exc), "finished_at": _now().isoformat()})
-                    _atomic_json(manifest_root / "latest.json", summary)
+                    failure_path = manifest_root / "latest.json" if symbols is None else manifest_root / "scopes" / f"{target.isoformat()}-capture-failed.json"
+                    _atomic_json(failure_path, summary)
                     return summary
                 if captured.get("status") != "captured" or not isinstance(captured.get("snapshot_relative_path"), str):
                     summary.update({"status": "failed", "last_error_code": "capture_not_publishable", "finished_at": _now().isoformat()})
-                    _atomic_json(manifest_root / "latest.json", summary)
+                    failure_path = manifest_root / "latest.json" if symbols is None else manifest_root / "scopes" / f"{target.isoformat()}-capture-failed.json"
+                    _atomic_json(failure_path, summary)
                     return summary
                 snapshot = root / captured["snapshot_relative_path"]
                 summary["captured"] = True
         manifest, captured_frame = _load_snapshot(root, Path(snapshot), target)
+        scoped_symbols = sorted(symbols) if symbols is not None else None
         completion_input = {"target_date": target.isoformat(), "snapshot_response_sha256": manifest["response_sha256"],
                             "snapshot_normalized_sha256": manifest["normalized_sha256"], "security_master_sha256": master_sha,
                             "publisher_schema": PUBLICATION_SCHEMA}
+        if scoped_symbols is not None:
+            completion_input["publication_scope_symbols"] = scoped_symbols
         completion_key = hashlib.sha256(json.dumps(completion_input, sort_keys=True).encode()).hexdigest()
         already = _previous_successes(records, completion_key, root)
         unmatched_already = _previous_unmatched(records, completion_key)
         source_symbols = set(captured_frame["symbol"])
-        unmatched = sorted(source_symbols - active)
+        unmatched = sorted((source_symbols & set(scoped_symbols)) - active) if scoped_symbols is not None else sorted(source_symbols - active)
         summary["unmatched"] = len(unmatched)
         summary["missing"] = len(active - source_symbols)
         summary["requested"] = len(active)
@@ -459,7 +473,8 @@ def publish_massive_daily(security_master: Path, data_root: Path, credential_fil
                 summary["failed"] += 1; summary["last_error_code"] = record["error_code"]
             _append(records, record)
             if summary["attempted"] % 100 == 0:
-                _atomic_json(manifest_root / "latest.json", summary)
+                latest_path = manifest_root / "latest.json" if scoped_symbols is None else manifest_root / "scopes" / f"{completion_key}.json"
+                _atomic_json(latest_path, summary)
         for symbol in unmatched:
             if symbol in unmatched_already:
                 continue
@@ -483,8 +498,14 @@ def publish_massive_daily(security_master: Path, data_root: Path, credential_fil
                        "completion_key": completion_key, "snapshot_response_sha256": manifest["response_sha256"],
                        "snapshot_normalized_sha256": manifest["normalized_sha256"]}
         _atomic_json(manifest_root / "publications" / target.isoformat() / f"{completion_key}-{uuid.uuid4().hex}.json", publication)
-        _atomic_json(manifest_root / "latest.json", summary)
-        if summary["status"] == "success":
+        # A scoped backfill is intentionally not the current full-day state:
+        # a grouped endpoint may return many symbols outside the requested
+        # repair subset, and a later full publication must still be possible.
+        if scoped_symbols is None:
+            _atomic_json(manifest_root / "latest.json", summary)
+        else:
+            _atomic_json(manifest_root / "scopes" / f"{completion_key}.json", summary)
+        if summary["status"] == "success" and scoped_symbols is None:
             _atomic_json(_publication_pointer(manifest_root, target), publication)
         return summary
 

@@ -74,6 +74,19 @@ def sync_status_payload(data_root: str | Path | None = None) -> dict:
     except (OSError, ValueError):
         pass
     try:
+        audit = _read(root, "manifests/massive-code-audit-v1/latest.json", "massive-code-audit-v1")
+        total, tested, remaining = (_count(audit, k) for k in ("total", "tested", "remaining"))
+        if tested + remaining != total or _count(audit, "target_returned") > tested:
+            raise ValueError("invalid_audit_counts")
+        counts = audit.get("counts", {})
+        if not isinstance(counts, dict): raise ValueError("invalid_audit_counts")
+        response["massive_audit"] = {"target_date": _text(audit.get("target_date")), "total": total,
+            "tested": tested, "remaining": remaining, "target_returned": _count(audit, "target_returned"),
+            "updated_at": _text(audit.get("updated_at")), "status": _text(audit.get("status")),
+            "empty_unknown": _count({"empty_unknown": counts.get("empty_unknown", 0)}, "empty_unknown")}
+    except (OSError, ValueError):
+        pass
+    try:
         evidence = _read(root, "catalogue/current-listing-gap-evidence-v1.json", "current-listing-gap-evidence-v1")
         items = evidence.get("items")
         if not isinstance(items, list) or not all(isinstance(item, dict) for item in items):

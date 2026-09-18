@@ -1,0 +1,11 @@
+[Unit]
+Description=Resume bounded historical data acquisition without model calls
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=3min
+Unit=quant-massive-backfill.service
+
+[Install]
+WantedBy=timers.target
+

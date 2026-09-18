@@ -1,0 +1,11 @@
+[Unit]
+Description=Resume bounded Massive per-code audit without model calls
+
+[Timer]
+OnBootSec=3min
+OnUnitInactiveSec=3min
+Unit=quant-massive-code-audit.service
+
+[Install]
+WantedBy=timers.target
+

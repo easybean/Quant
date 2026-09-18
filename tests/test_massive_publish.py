@@ -67,6 +67,19 @@ def test_publishes_exact_active_symbols_with_observation_lineage_and_idempotency
     assert len(list((tmp_path / "manifests/massive-daily-v1/publications").rglob("*.json"))) == 2
 
 
+def test_scoped_backfill_publication_does_not_replace_full_day_pointer_or_summary(tmp_path):
+    snapshot, master = _setup(tmp_path, [_row("AAA"), _row("BBB")])
+    full = publish_massive_daily(master, tmp_path, snapshot=snapshot, date_=DAY, now=NOW)
+    pointer = tmp_path / "manifests/massive-daily-v1/published" / f"{DAY.isoformat()}.json"
+    before_pointer = pointer.read_bytes()
+    before_latest = (tmp_path / "manifests/massive-daily-v1/latest.json").read_bytes()
+    result = publish_massive_daily(master, tmp_path, snapshot=snapshot, date_=DAY, now=NOW, symbols={"AAA"})
+    assert result["requested"] == 1 and result["missing"] == 0
+    assert pointer.read_bytes() == before_pointer
+    assert (tmp_path / "manifests/massive-daily-v1/latest.json").read_bytes() == before_latest
+    assert list((tmp_path / "manifests/massive-daily-v1/scopes").glob("*.json"))
+
+
 def test_existing_invalid_view_is_copied_to_quarantine_without_overwrite(tmp_path):
     snapshot, master = _setup(tmp_path, [_row("AAA")])
     path = tmp_path / "bars/daily/provider=massive/namespace=massive-daily-v1/symbol=AAA-cb1ad211/bars.parquet"

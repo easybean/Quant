@@ -64,6 +64,21 @@ def test_massive_appends_without_duplicate_symbol_or_replacing_history(tmp_path)
     assert response["bars"][-1]["close"] == 13
 
 
+def test_massive_is_primary_for_new_dates_but_preserves_legacy_base(tmp_path):
+    root = _root(tmp_path)
+    from quant_data.recovery_sync import _publish_catalogue
+    for provider, namespace, close in [("massive", "massive-daily-v1", 13), ("yfinance", "yahoo-daily-v1", 14)]:
+        path = root / f"bars/daily/provider={provider}/namespace={namespace}/symbol=AAA-cb1ad211/bars.parquet"
+        path.parent.mkdir(parents=True)
+        frame = pd.DataFrame({"date": ["2024-01-04", "2024-01-05"], "open": [12, 12], "high": [15, 15], "low": [11, 11], "close": [close, close], "volume": [150, 150], "source": [provider, provider], "adjustment_status": ["raw", "raw"]})
+        frame.to_parquet(path)
+        _publish_catalogue(root, "AAA", path, frame, provider=provider, namespace=namespace)
+    item = search_us_daily_series("AAA", data_root=root)["items"][0]
+    bars = read_us_daily_bars(item["series_id"], "2024-01-04", "2024-01-05", data_root=root)["bars"]
+    assert bars[0]["close"] == 12.5
+    assert bars[1]["source"] == "massive" and bars[1]["close"] == 13
+
+
 def test_browser_rejects_unbounded_or_unknown_requests(tmp_path):
     root = _root(tmp_path)
     with pytest.raises(DailyQuoteInputError):

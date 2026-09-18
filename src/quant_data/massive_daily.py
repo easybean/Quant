@@ -238,6 +238,9 @@ def capture_massive_daily(
 
     api_key = _load_api_key(Path(credential_file))
     endpoint = ENDPOINT_TEMPLATE.format(date=requested_date.isoformat())
+    if request_get is requests.get:
+        from .massive_rate import wait_for_slot
+        wait_for_slot(Path(data_root))
     try:
         response = request_get(
             endpoint,

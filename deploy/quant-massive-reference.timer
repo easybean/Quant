@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily Massive current acquisition metadata refresh
+
+[Timer]
+OnCalendar=*-*-* 09:00:00 Asia/Shanghai
+Persistent=true
+Unit=quant-massive-reference.service
+
+[Install]
+WantedBy=timers.target

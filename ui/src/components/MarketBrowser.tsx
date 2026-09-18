@@ -40,7 +40,7 @@ export function MarketBrowser() {
   async function search() {
     if (loading) return
     const value = query.trim().toUpperCase()
-    if (!/^[A-Z0-9._-]{1,32}$/.test(value)) { setError('请输入有效证券代码，例如 TSLA。'); return }
+    if (!/^[A-Z0-9.$_-]{1,32}$/.test(value)) { setError('请输入有效证券代码，例如 TSLA 或 ABR$D。'); return }
     setLoading(true); setError(''); setData(null); setSearched(true)
     try {
       const found = await searchDailySeries(value, new AbortController().signal)

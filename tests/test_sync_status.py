@@ -78,3 +78,13 @@ def test_massive_summary_is_independent_and_does_not_expose_key(tmp_path):
     assert result["providers"][0]["provider"] == "massive"
     assert result["providers"][0]["success"] == 1
     assert "/secret" not in json.dumps(result)
+
+
+def test_massive_per_code_audit_is_allowlisted(tmp_path):
+    folder = tmp_path / "manifests/yahoo-daily-v1"; folder.mkdir(parents=True)
+    (folder / "coverage.json").write_text(json.dumps({"schema_version": "yahoo-sync-coverage-v1", "active_symbols": 2, "endpoint_current": 1, "needs_update": 1, "historical_only_symbols": 0}))
+    audit = tmp_path / "manifests/massive-code-audit-v1"; audit.mkdir()
+    (audit / "latest.json").write_text(json.dumps({"schema_version": "massive-code-audit-v1", "total": 2, "tested": 1, "remaining": 1, "target_returned": 1, "credential_file": "/secret"}))
+    result = sync_status_payload(tmp_path)
+    assert result["massive_audit"]["remaining"] == 1
+    assert "/secret" not in json.dumps(result)

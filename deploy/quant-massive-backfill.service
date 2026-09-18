@@ -1,0 +1,20 @@
+[Unit]
+Description=Resume frozen Massive full US daily historical gap plan
+Requires=mihomo.service
+After=mihomo.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/davidou/quant/app
+Environment=PYTHONPATH=/home/davidou/quant/app/src
+Environment=HTTP_PROXY=http://127.0.0.1:7890
+Environment=HTTPS_PROXY=http://127.0.0.1:7890
+Environment=NO_PROXY=localhost,127.0.0.1,::1
+ExecStart=/home/davidou/quant/venv/bin/python -m quant_data.massive_backfill --data-root /home/davidou/quant/data --security-master /home/davidou/quant/data/metadata/security_master.parquet --credential-file /home/davidou/massivekey --authorized-start 2016-08-31 --max-sessions 3
+ExecStartPost=/home/davidou/quant/venv/bin/python -m quant_data.massive_alias_publish --data-root /home/davidou/quant/data --security-master /home/davidou/quant/data/metadata/security_master.parquet --all-captured-recent
+ExecStartPost=/home/davidou/quant/venv/bin/python -m quant_data.sync_coverage --data-root /home/davidou/quant/data --security-master /home/davidou/quant/data/metadata/security_master.parquet
+ExecStartPost=/home/davidou/quant/venv/bin/python -c 'import json,subprocess; from pathlib import Path; p=Path("/home/davidou/quant/data/manifests/massive-backfill-v1/latest.json"); s=json.loads(p.read_text()) if p.exists() else {}; subprocess.run(["systemctl","--user","disable","--now","quant-massive-backfill.timer"],check=True) if s.get("status")=="complete" else None'
+TimeoutStartSec=45min
+UMask=0077
+Nice=10
+NoNewPrivileges=true

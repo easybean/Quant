@@ -23,7 +23,7 @@ from .sync_eligibility import select_sync_symbols, eligibility_report
 from .recovery_sync import run_recovery
 from .symbol_mapping import MAPPING_NAMESPACE, load_symbol_mapping, mapping_tail_tasks
 
-NAMESPACES = ("alpaca-sip-recovery-v1", "yahoo-daily-v1", "nasdaq-daily-recovery-v1", "massive-daily-v1")
+NAMESPACES = ("alpaca-sip-recovery-v1", "yahoo-daily-v1", "nasdaq-daily-recovery-v1", "massive-daily-v1", "massive-current-alias-daily-v1")
 
 
 def _file_sha256(path: Path) -> str:

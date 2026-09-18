@@ -23,6 +23,20 @@ def test_massive_endpoint_is_counted_but_does_not_erase_bridge_gap(tmp_path, mon
     assert details[0]["latest_date"] == "2026-09-17" and details[0]["bridge_needed"] is True
 
 
+def test_weekend_is_not_a_required_bridge_session(tmp_path, monkeypatch):
+    from datetime import date
+    monkeypatch.setattr("quant_data.sync_scheduler.completed_session", lambda _: date(2026, 8, 31))
+    manifest = tmp_path / "manifests/yahoo-daily-v1"; manifest.mkdir(parents=True)
+    (manifest / "baselines.json").write_text(json.dumps({"symbols": {"TSLA": {"last_date": "2026-08-28"}}}))
+    source = tmp_path / "manifests/massive-daily-v1"; source.mkdir()
+    (source / "records.jsonl").write_text(json.dumps({"symbol": "TSLA", "status": "success", "requested_start": "2026-08-31"}) + "\n")
+    catalogue = tmp_path / "catalogue"; catalogue.mkdir()
+    (catalogue / "us-daily-browser-v1.json").write_text(json.dumps({"schema_version": "us-daily-browser-v1", "series": [{"symbol": "TSLA", "provider": "massive", "namespace": "massive-daily-v1", "last_date": "2026-08-31"}]}))
+    master = tmp_path / "master.parquet"
+    pd.DataFrame({"symbol": ["TSLA"], "status": ["active"], "asset_type": ["Stock"]}).to_parquet(master)
+    assert build_sync_coverage(tmp_path, master)["endpoint_current"] == 1
+
+
 def test_historical_only_is_excluded_and_bridge_gap_is_not_current(tmp_path, monkeypatch):
     from datetime import date
     monkeypatch.setattr("quant_data.sync_scheduler.completed_session", lambda _: date(2026, 9, 15))
