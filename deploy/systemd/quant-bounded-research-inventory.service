@@ -8,4 +8,3 @@ ExecStart=/home/davidou/quant/venv/bin/python /home/davidou/quant/releases/us-re
 TimeoutStartSec=120
 UMask=0077
 NoNewPrivileges=true
-
