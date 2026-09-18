@@ -27,6 +27,10 @@ _MAX_PAGES = 64
 _SYMBOL = re.compile(r"[A-Z0-9.$_-]{1,32}")
 
 
+class LocalSymbolFormatRejected(ValueError):
+    """This one request cannot be sent; not a supplier outage or delisting."""
+
+
 def _valid_symbol(value: str) -> bool:
     return bool(_SYMBOL.fullmatch(value))
 
@@ -70,6 +74,7 @@ class _SIPBatchDownloader:
         self.single_request_count = 0
         self.by_symbol: dict[str, tuple[date, date, str, tuple[str, ...]]] = {}
         self.original_by_provider: dict[str, str] = {}
+        self.invalid_symbols: set[str] = set()
         grouped: dict[tuple[date, date], list[str]] = defaultdict(list)
         seen_symbols: set[str] = set()
         for task in tasks:
@@ -77,11 +82,14 @@ class _SIPBatchDownloader:
                 symbol = str(task["symbol"]).strip().upper()
                 provider_symbol = str(task.get("provider_symbol", symbol)).strip().upper()
                 start, end = date.fromisoformat(str(task["requested_start"])), date.fromisoformat(str(task["requested_end"]))
-                if not _valid_symbol(symbol) or not _valid_symbol(provider_symbol) or start > end or symbol in seen_symbols or provider_symbol in self.original_by_provider:
+                if start > end or symbol in seen_symbols or provider_symbol in self.original_by_provider:
                     raise ValueError
             except (KeyError, TypeError, ValueError) as exc:
                 raise ValueError("sip_batch_tasks_invalid") from exc
             seen_symbols.add(symbol)
+            if not _valid_symbol(symbol) or not _valid_symbol(provider_symbol):
+                self.invalid_symbols.add(symbol)
+                continue
             self.original_by_provider[provider_symbol] = symbol
             grouped[(start, end)].append(provider_symbol)
         self.chunks: dict[tuple[str, ...], tuple[date, date]] = {}
@@ -196,6 +204,8 @@ class _SIPBatchDownloader:
 
     def __call__(self, symbol: str, start: date, end: date) -> pd.DataFrame:
         normalized = str(symbol).strip().upper()
+        if normalized in self.invalid_symbols:
+            raise LocalSymbolFormatRejected("invalid_sip_symbol_format")
         task = self.by_symbol.get(normalized)
         if task is None or task[:2] != (start, end):
             raise ValueError("sip_batch_symbol_or_window_not_planned")

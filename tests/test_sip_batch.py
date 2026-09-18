@@ -52,6 +52,19 @@ def test_groups_exact_windows_and_exposes_cached_symbol_frames(monkeypatch):
                       "start": "2024-01-02T05:00:00Z", "end": "2024-01-10T04:59:59.999999Z", "limit": 10000, "sort": "asc"}
 
 
+def test_invalid_local_symbols_do_not_poison_valid_batch(monkeypatch):
+    from quant_data.sip_batch import LocalSymbolFormatRejected
+    bad = ("BC/PB", "BC/PC", "CAPTW(EXP20260807)", "NXT(EXP20091224)", "NYCB- PR-U")
+    downloader, calls = _downloader(monkeypatch, _tasks(*bad, "TSLA"), [Response(payload={"bars": {
+        "TSLA": [{"t": "2024-01-02T05:00:00Z", "o": 1, "h": 2, "l": .5, "c": 1.5, "v": 3}]}})])
+    for symbol in bad:
+        with pytest.raises(LocalSymbolFormatRejected, match="invalid_sip_symbol_format"):
+            downloader(symbol, date(2024, 1, 2), date(2024, 1, 9))
+    assert not calls
+    assert len(downloader("TSLA", date(2024, 1, 2), date(2024, 1, 9))) == 1
+    assert calls[0][1]["params"]["symbols"] == "TSLA"
+
+
 def test_mapped_provider_symbol_is_requested_and_returned_under_original_symbol(monkeypatch):
     tasks = [{"symbol": "ABR$D", "provider_symbol": "ABR.PRD", "requested_start": "2024-01-02", "requested_end": "2024-01-09", "task_id": "mapped"}]
     downloader, calls = _downloader(monkeypatch, tasks, [Response(payload={"bars": {"ABR.PRD": [

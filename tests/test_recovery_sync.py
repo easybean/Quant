@@ -73,6 +73,22 @@ def test_rejected_ohlcv_does_not_stop_other_symbols(tmp_path):
     assert result["attempted"] == 4 and result["success"] == 1 and not result["circuit_open"]
 
 
+def test_local_format_failures_do_not_open_circuit_or_claim_http(tmp_path):
+    from quant_data.sip_batch import LocalSymbolFormatRejected
+    symbols = ["BC/PB", "BC/PC", "NXT(EXP20091224)", "TSLA"]
+    master, root = _setup(tmp_path, [], {"symbol": symbols, "status": ["active"] * 4, "asset_type": ["Stock"] * 4})
+    queue = tmp_path / "queue.json"
+    queue.write_text(json.dumps({"schema_version": "us-daily-gap-queue-v1", "tasks": [
+        {"symbol": s, "task_id": s, "requested_start": "2024-01-02", "requested_end": "2024-01-09"} for s in symbols]}))
+    def download(symbol, *_):
+        if symbol != "TSLA": raise LocalSymbolFormatRejected("invalid_sip_symbol_format")
+        return _bars()
+    result = run_recovery(master, root, now=NOW, gap_queue=queue, recovery_provider="alpaca", downloader=download, request_delay=0)
+    assert result["attempted"] == 4 and result["success"] == 1 and not result["circuit_open"]
+    rows = [json.loads(line) for line in (root / "manifests/alpaca-sip-recovery-v1/records.jsonl").read_text().splitlines()]
+    assert all(r["error_code"] == "invalid_sip_symbol_format" and r["http_response_received"] is False for r in rows[:3])
+
+
 def test_default_mapped_batch_is_called_with_original_contract_key(tmp_path, monkeypatch):
     master, root = _setup(tmp_path, [], {"symbol": ["ABR$D"], "status": ["active"], "asset_type": ["Stock"]})
     queue = tmp_path / "queue.json"

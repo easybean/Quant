@@ -27,6 +27,7 @@ from .daily_sync import _target_end, _validate_normalized, yahoo_daily_history_d
 from .sync_eligibility import select_sync_symbols
 from .pipeline import FatalProviderError, PermanentDownloadError, make_alpaca_downloader, nasdaq_web_downloader, normalize_bars, symbol_key
 from .symbol_mapping import MAPPING_NAMESPACE
+from .sip_batch import LocalSymbolFormatRejected
 
 NAMESPACE = "nasdaq-daily-recovery-v1"
 PROVIDER = "nasdaq"
@@ -358,6 +359,10 @@ def run_recovery(security_master: Path, data_root: Path, *, max_runtime_seconds:
           if mapped_queue:
               _record_unverified_mapping_history(manifest, failure)
           record["status"] = "success"; summary["success"] += 1; consecutive = 0
+        except LocalSymbolFormatRejected:
+          record.update({"status": "failed", "error_code": "invalid_sip_symbol_format", "http_response_received": False})
+          summary["failed"] += 1
+          consecutive = 0  # Local quarantine must not open the provider circuit.
         except (SymbolHistoryUnknown, SymbolRequestRejected) as exc:
           record.update({"status": "failed", "error_code": str(exc), "http_response_received": True})
           summary["failed"] += 1
