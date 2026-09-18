@@ -1,0 +1,11 @@
+[Unit]
+Description=Freeze five-stock diagnostic evidence without qualifying research
+After=quant-security-catalogue.service
+
+[Service]
+Type=oneshot
+ExecStart=/home/davidou/quant/venv/bin/python /home/davidou/quant/releases/us-research-progress-20260918-03/capture_bounded_research_inventory_v4.py --data-root /home/davidou/quant/data --asset-reference /home/davidou/quant/data/reference/provider-asset-metadata/20260917T164916Z-cd16c833/assets.json --output /home/davidou/quant/data/reference/bounded-research/daily --daily
+TimeoutStartSec=120
+UMask=0077
+NoNewPrivileges=true
+

@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily immutable bounded research inventory (no model calls)
+
+[Timer]
+OnCalendar=*-*-* 08:10:00 Asia/Shanghai
+Persistent=true
+Unit=quant-bounded-research-inventory.service
+
+[Install]
+WantedBy=timers.target
