@@ -87,6 +87,7 @@
 
 - 当前核心是美股日线研究数据与配置/任务骨架；`src/quant_data/backtest.py` 只允许合成 `synthetic-us-daily-v1` 的日线限价黄金路径。真实正式回测仍因合格 P3-03A 资产池、完整公司行为/退市适用性等缺失而**必须阻断**。
   - 2026-09-19新增独立 `signal_backtest.py` / `synthetic_signal_daily`：只运行模块内固定 `synthetic-signal-daily-v1`，策略可驱动下一session DAY限价买卖与净值；不是原固定成交路径，也不是Nautilus/真实行情能力。禁止接受任意行情、路径或代码扩成门禁旁路。fixture及语义改变须发布新版本并保留旧版本重放能力。
+  - 2026-09-19另有离线 `exploratory_backtest.py`：仅固定TSLA单源166日样本和SMA10/30，明确标记`qualified=false`、`formal_backtest_enabled=false`；不是API/UI可提交的正式回测。其收益仅为探索性假设结果，历史PIT vintage、公司行为完整性和数据许可未独立验收；不得据此放松P3-03A门禁或扩为任意真实行情执行入口。
 - `factor_jobs.py` 只有管理员配置的固定、合格快照才能产生研究收益；代表性 P1-04 公司行为样本不等于全市场总回报或合格研究池。
 - NautilusTrader 1.221.0 仅有窄范围合成美股日线限价、部分成交、固定费用证据；市价单、真实行情、完整成本/公司行为/退市、其他市场与实盘能力均不得声称已验证。
 - 回测/研究/模拟/外部 paper/实盘相互隔离。当前不开放真实下单；策略不可绕过风控或直接调用券商，浏览器不可获得任意代码执行或密钥。

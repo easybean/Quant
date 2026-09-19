@@ -1,0 +1,19 @@
+{
+  "schema_version": "exploratory-tsla-acceptance-v1",
+  "status": "succeeded_exploratory_only",
+  "qualified": false,
+  "formal_backtest_enabled": false,
+  "symbol": "TSLA",
+  "range": { "start": "2026-01-02", "end": "2026-08-31" },
+  "sessions_expected": 166,
+  "sessions_actual": 166,
+  "source_sha256": "2a5f4299bd39622d55df21a044de58844993a0ef58bba8559c07b63487713c6e",
+  "snapshot_manifest_sha256": "69b423ee841ae5655f49510f2d3029ab27e10b27bf7c37bca9b6842ea3c9b9bd",
+  "report_file_sha256": "f0ddbd351c09a2047b570c8d64d3e62df172fe647b52bb1bc3f07f94c04f830b",
+  "report_hash": "f6a592687629a40defbcdb33936898f31b7ce9da90d9114a73f8cbd5a64ff2ba",
+  "strategies": {
+    "sma_10_30": { "terminal_equity_usd": "10267.8414825", "total_return_pct": "2.67841482500", "max_drawdown_pct": "-18.44707226697371233173986596", "fills": 5, "commission_usd": "5" },
+    "buy_and_hold": { "terminal_equity_usd": "8230.7281650", "total_return_pct": "-17.6927183500", "max_drawdown_pct": "-33.49394061906554493890585649", "fills": 1, "commission_usd": "1" }
+  },
+  "checks": { "local_tests": "32 passed", "all_daily_ledgers_reconciled": true, "all_orders_after_signal_session": true, "full_report_hash_verified": true, "source_sha_verified_at_run": true, "formal_api_gate_unchanged": true }
+}

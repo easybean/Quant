@@ -16,6 +16,8 @@ PYTHONPATH=src .venv/bin/python -m quant_data.research_snapshot /path/to/snapsho
 
 2026-09-19新增“历史回测 → 新建回测 → 策略驱动闭环验收”：买入持有/双均线的收盘信号实际驱动下一交易日DAY限价买卖、成本、每日净值和报告。它使用固定ACME合成样本，不是股票历史收益；真实行情门禁保持阻断。见[策略闭环验收](docs/tasks/SIGNAL-BACKTEST-20260919.md)。
 
+同日另做了TSLA单源166日真实行情的**离线探索性回测**，固定SMA(10/30)与买入持有对照，结果和限制见[TSLA探索性报告](docs/tasks/EXPLORATORY-TSLA-20260919.md)。它未接入网页正式回测入口；历史可用时点/公司行为等资格未完成，结果不等于合格研究收益。
+
 ## 第一阶段数据管道
 
 ### Yahoo 每日更新
